@@ -60,6 +60,41 @@ class NeRFCamera(Camera):
     r_o = self.cam_to_world[..., :3, -1][:, None, None, :].expand_as(r_d)
     return torch.cat([r_o, r_d], dim=-1)
 
+@dataclass
+class FVRNeRFCamera(NeRFCamera):
+  cam_to_world:torch.tensor = None
+  focal: float=None
+  device:str ="cuda"
+
+  def __getitem__(self, v):
+    return FVRNeRFCamera(cam_to_world=self.cam_to_world[v], focal=self.focal, device=self.device)
+
+  def sample_positions(
+    self,
+    position_samples,
+    size: int,
+    with_noise=False,
+  ):
+    device=self.device
+    u,v = position_samples.split([1,1], dim=-1)
+    # u,v each in range [0, size]
+    if with_noise:
+      u = u + (torch.rand_like(u)-0.5)*with_noise
+      v = v + (torch.rand_like(v)-0.5)*with_noise
+
+    d = torch.stack([
+        (u - size * 0.5) / self.focal,
+        -(v - size * 0.5) / self.focal,
+        -torch.ones_like(u),
+    ], dim=-1)
+    r_d = torch.sum(d[..., None, :] * self.cam_to_world[..., :3, :3], dim=-1)
+    r_d = r_d.permute(2,0,1,3) # [H, W, B, 3] -> [B, H, W, 3]
+    r_o = self.cam_to_world[..., :3, -1][:, None, None, :].expand_as(r_d)
+    # return all the ray origins
+    return r_o # [B, H, W, 3]
+
+
+
 def vec2skew(v):
   zero = torch.zeros(v.shape[:-1] + (1,), device=v.device, dtype=v.dtype)
   return torch.stack([

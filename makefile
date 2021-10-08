@@ -193,9 +193,9 @@ nerv_point_subrefl: clean
 
 original: clean
 	python3 -O runner.py -d data/nerf_synthetic/lego/ --data-kind original \
-	--size 64 --crop --epochs 80_000 --save models/lego.pt \
-	--near 2 --far 6 --batch-size 4 --crop-size 26 --model plain -lr 1e-3 \
-	--loss-fns l2 --valid-freq 499 --nosave #--load models/lego.pt #--omit-bg
+	--size 256 --crop --epochs 25_000 --save models/lego.pt \
+	--near 2 --far 6 --batch-size 4 --crop-size 40 --model plain -lr 1e-3 \
+	--loss-fns l2 --valid-freq 499 --refl-kind view --load models/lego.pt #--omit-bg
 
 test_original: clean
 	python3 -O runner.py -d data/nerf_synthetic/lego/ --data-kind original \
