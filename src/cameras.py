@@ -96,8 +96,8 @@ class FVRNeRFCamera(Camera):
         -torch.ones_like(u),
     ], dim=-1)
     r_d = torch.sum(d[..., None, :] * self.cam_to_world[..., :3, :3], dim=-1)
-    slice_positions = torch.sum(s[..., None, :] * self.cam_to_world[..., :3, :3], dim=-1)
     r_d = r_d.permute(2,0,1,3) # [H, W, B, 3] -> [B, H, W, 3]
+    slice_positions = torch.sum(s[..., None, :] * self.cam_to_world[..., :3, :3], dim=-1)
     slice_positions = slice_positions.permute(2,0,1,3) # [H, W, B, 3] -> [B, H, W, 3]
     # return the slice through the origin parallel to image plane
     return torch.cat([slice_positions, r_d], dim=-1)
