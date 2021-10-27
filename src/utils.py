@@ -9,8 +9,7 @@ import matplotlib.pyplot as plt
 
 def create_fourier_basis(batch_size, features=3, freq=40, device="cuda"):
   B = freq * torch.randn(batch_size, features, device=device).T
-  out_size = batch_size * 2 + features
-  return B, out_size
+  return B
 
 @torch.jit.script
 def fourier(x, B):
@@ -233,6 +232,7 @@ def dir_to_uv(d):
   elaz = dir_to_elev_azim(d)
   return elev_azim_to_uv(elaz)
 
+# x is usually the point, y is usually the SDF value
 def autograd(x, y):
   assert(x.requires_grad)
   grad_outputs = torch.ones_like(y)
@@ -285,7 +285,7 @@ def rgb2xyz(v):
 
 def sample_random_hemisphere(around, num_samples:int=32):
   n = num_samples
-  u,v = torch.rand(num_samples, 2, device=around.device).split([1,1], dim=-1)
+  u,v = torch.rand(n, 2, device=around.device).split([1,1], dim=-1)
   sin_theta = (-u * (u-2)).clamp(min=1e-8).sqrt()
   phi = 2 * math.pi * v
 
@@ -300,10 +300,18 @@ def sample_random_hemisphere(around, num_samples:int=32):
   ar_flat = around.reshape(-1, 3)
   R = rot_from(ar_flat, basis.unsqueeze(0).expand_as(ar_flat), dim=-1)
   R0 = R.shape[0]
-  R = R.repeat(num_samples,1,1)
+  R = R.repeat(n,1,1)
   dirs = dirs.repeat(R0, 1)
   return torch.bmm(R, dirs.unsqueeze(-1))\
     .reshape((n, *around.shape))
+
+def sample_random_sphere(around, num_samples:int=32):
+  n = num_samples
+  uv = (torch.rand(n, 2, device=around.device) - 0.5) * math.tau
+  return elev_azim_to_dir(uv)\
+    .unsqueeze(1)\
+    .expand(n, np.prod(around.shape[:-1]), 3)\
+    .reshape(n, *around.shape)
 
 def rot_from(a, b, dim=-1):
   v = torch.cross(a,b, dim=dim)
@@ -357,6 +365,22 @@ def depth_to_normals(depth_img):
   d = torch.cat([dz_dx/2, dz_dy/2, z], dim=-1)
   return F.normalize(d, dim=-1)
 
+# returns a tensor of a color map for a given camera
+def color_map(camera, size=256) -> ["size", "size", 3]:
+  x, y = torch.meshgrid(
+    torch.linspace(-1, 1, size, device=camera.device),
+    torch.linspace(-1, 1, size, device=camera.device),
+  )
+  z_sq =  1 - x * x - y * y
+  z = z_sq.sqrt()
+  dir = torch.stack([x,y,z], dim=-1)
+  # multiply dir by world to camera transformation (should be 3x3 matrix)
+  dir = (camera.cam_to_world[..., :3, :3].inverse() * dir.unsqueeze(-2)).sum(dim=-1)
+  dir = dir[..., :3]/dir[..., -1:].clamp(min=1e-8)
+  dir = (F.normalize(dir, dim=-1) + 1)/2
+  dir[z_sq < 0] = 0
+  return dir
+
 
 # sigmoids which shrink or expand the total range to prevent gradient vanishing,
 # or prevent it from representing full density items.
@@ -367,17 +391,22 @@ def cyclic_sigmoid(v, eps:float=-1e-2,period:int=5):
   return ((v/period).sin()+1)/2 * (1+2*eps) - eps
 def upshifted_sigmoid(v, eps=1e-2): return v.sigmoid() * (1-eps) + eps
 def upshifted_softplus(v, eps=1e-2): return F.softplus(v) + eps
+# a leaky softplus implementation
+def leaky_softplus(v, alpha=0.01):
+  return torch.where(v >= 0, F.softplus(v-3), alpha * v + 0.0485873515737)
 
 # list of available sigmoids
 sigmoid_kinds = {
   "normal": torch.sigmoid,
   "thin": thin_sigmoid,
+  "tanh": torch.tanh,
   "fat": fat_sigmoid,
   "cyclic": cyclic_sigmoid,
   "upshifted": upshifted_sigmoid,
   "softmax": nn.Softmax(dim=-1),
   # oops this isn't a sigmoid
   "leaky_relu": F.leaky_relu,
+  "sin": torch.sin,
   "upshifted_softplus": upshifted_softplus,
 }
 def load_sigmoid(kind="thin"):

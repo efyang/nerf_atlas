@@ -28,8 +28,8 @@ import src.cameras as cameras
 import src.hyper_config as hyper_config
 import src.renderers as renderers
 from src.lights import light_kinds
-from src.utils import ( save_image, save_plot, load_image )
-from src.neural_blocks import ( Upsampler, SpatialEncoder, StyleTransfer )
+from src.utils import ( save_image, save_plot, load_image, dir_to_elev_azim )
+from src.neural_blocks import ( Upsampler, SpatialEncoder, StyleTransfer, FourierEncoder )
 
 import os
 
@@ -70,7 +70,6 @@ def arguments():
     "--sigmoid-kind", help="What sigmoid to use, curr keeps old", default="thin",
     choices=list(utils.sigmoid_kinds.keys()),
   )
-  a.add_argument("--sparsify-alpha", help="Weight for sparsifying alpha",type=float,default=0)
   a.add_argument("--backing-sdf", help="Use a backing SDF", action="store_true")
 
   a. add_argument(
@@ -94,7 +93,7 @@ def arguments():
   a.add_argument("--omit-bg", help="Omit black bg with some probability", action="store_true")
   a.add_argument(
     "--train-parts", help="Which parts of the model should be trained",
-    choices=["all", "refl", "[TODO]Camera"], default="all",
+    choices=["all", "refl", "occ", "[TODO]Camera"], default=["all"], nargs="+",
   )
   a.add_argument(
     "--loss-fns", help="Loss functions to use", nargs="+", type=str,
@@ -118,7 +117,7 @@ def arguments():
   # TODO really fix MPIs
   a.add_argument("--mpi", help="[WIP] Use multi-plain imaging", action="store_true")
   a.add_argument(
-    "--replace", nargs="*", choices=["refl", "occ", "bg", "sigmoid"], default=[], type=str,
+    "--replace", nargs="*", choices=["refl", "occ", "bg", "sigmoid", "light"], default=[], type=str,
     help="Modules to replace on this run, if any. Take caution for overwriting existing parts.",
   )
 
@@ -135,18 +134,18 @@ def arguments():
     help="Latent-size to use in shape models. If not supported by the shape model, it will be ignored.",
   )
   a.add_argument(
-    "--spherical-harmonic-order", default=2, type=int,
-    help="Learn spherical harmonic coefficients up to given order. Used w/ --refl-kind=sph-har",
+    "--refl-order", default=2, type=int,
+    help="Order for classical Spherical Harmonics & Fourier Basis BSDFs/Reflectance models",
   )
   a.add_argument(
-    "--path-learn-missing", action="store_true",
-    help="Learn missing sampled components during path tracing",
+    "--inc-fourier-freqs", action="store_true",
+    help="Multiplicatively increase the fourier frequency standard deviation on each run",
   )
 
   refla = a.add_argument_group("reflectance")
   refla.add_argument(
     "--refl-kind", help="What kind of reflectance model to use",
-    choices=refl.refl_kinds,
+    choices=list(refl.refl_kinds.keys()), default=["view"],
   )
   refla.add_argument(
     "--weighted-subrefl-kinds",
@@ -164,6 +163,14 @@ def arguments():
     "--space-kind", choices=["identity", "surface", "none"], default="identity",
     help="Space to encode texture: surface builds a map from 3D (identity) to 2D",
   )
+  refla.add_argument(
+    "--alt-train", choices=["analytic", "learned"], default="learned",
+    help="Whether to train the analytic or the learned model in this session",
+  )
+  refla.add_argument(
+    "--refl-bidirectional", action="store_true",
+    help="Allow normals to be flipped for the reflectance (just Diffuse for now)",
+  )
 
   rdra = a.add_argument_group("integrator")
   rdra.add_argument(
@@ -171,8 +178,12 @@ def arguments():
     help="Integrator to use for surface rendering",
   )
   rdra.add_argument(
-    "--occ-kind", choices=[None, "hard", "learned", "all-learned"], default=None,
+    "--occ-kind", choices=list(renderers.occ_kinds.keys()), default=None,
     help="Occlusion method for shadows to use in integration",
+  )
+
+  rdra.add_argument(
+    "--smooth-occ", default=0, type=float, help="Weight to smooth occlusion/shadows by."
   )
 
   lighta = a.add_argument_group("light")
@@ -180,13 +191,21 @@ def arguments():
     "--light-kind", choices=list(light_kinds.keys()), default=None,
     help="Kind of light to use while rendering. Dataset indicates light is in dataset",
   )
+  lighta.add_argument(
+    "--light-intensity", type=int, default=100, help="Intensity of light to use with loaded dataset",
+  )
 
   sdfa = a.add_argument_group("sdf")
+  sdfa.add_argument("--sdf-eikonal", help="Weight of SDF eikonal loss", type=float, default=0)
   sdfa.add_argument(
-    "--sdf-eikonal", help="Weight of SDF eikonal loss", type=float, default=0,
+    "--surface-eikonal", help="Weight of SDF eikonal loss on surface", type=float, default=0,
   )
+  # normal smoothing arguments
   sdfa.add_argument(
     "--smooth-normals", help="Amount to attempt to smooth normals", type=float, default=0,
+  )
+  sdfa.add_argument(
+    "--smooth-surface", help="Amount to attempt to smooth surface normals", type=float, default=0,
   )
   sdfa.add_argument(
     "--smooth-eps", help="size of random uniform perturbation for smooth normals regularization",
@@ -194,8 +213,14 @@ def arguments():
   )
   sdfa.add_argument(
     "--smooth-eps-rng", action="store_true",
-    help="smooth by a random amount instead of smoothing by a fixed distance",
+    help="Smooth by random amount instead of smoothing by a fixed distance",
   )
+  sdfa.add_argument(
+    "--smooth-n-ord", nargs="+", default=[2], choices=[1,2], type=int,
+    help="Order of vector to use when smoothing normals",
+  )
+
+
   sdfa.add_argument(
     "--sdf-kind", help="Which SDF model to use", type=str,
     choices=["spheres", "siren", "local", "mlp", "triangles"], default="mlp",
@@ -206,14 +231,11 @@ def arguments():
     help="Intersect the learned SDF with a bounding sphere at the origin, < 0 is no sphere",
   )
   sdfa.add_argument(
-    "--sdf-isect-kind", choices=["sphere", "secant", "bisect"], default="sphere",
+    "--sdf-isect-kind", choices=["sphere", "secant", "bisect"], default="bisect",
     help="Marching kind to use when computing SDF intersection.",
   )
 
-  sdfa.add_argument(
-    "--volsdf-scale-decay", type=float, default=0, help="Decay weight for volsdf scale",
-  )
-
+  sdfa.add_argument("--volsdf-scale-decay", type=float, default=0, help="Decay weight for volsdf scale")
   dnerfa = a.add_argument_group("dnerf")
   dnerfa.add_argument("--dnerfae", help="Use DNeRFAE on top of DNeRF", action="store_true")
   dnerfa.add_argument(
@@ -221,7 +243,6 @@ def arguments():
   )
   dnerfa.add_argument("--time-gamma", help="Apply a gamma based on time", action="store_true")
   dnerfa.add_argument("--gru-flow", help="Use GRU for Δx", action="store_true")
-  dnerfa.add_argument("--nicepath", help="Render a nice path for DNeRF", action="store_true")
   dnerfa.add_argument("--with-canon", help="Preload a canonical NeRF", type=str, default=None)
   dnerfa.add_argument("--fix-canon", help="Do not train canonical NeRF", action="store_true")
 
@@ -230,6 +251,7 @@ def arguments():
   cam.add_argument("--far", help="far plane for camera", type=float, default=6)
 
   rprt = a.add_argument_group("reporting parameters")
+  rprt.add_argument("--name", help="Display name for convenience in log file", type=str, default="")
   rprt.add_argument("-q", "--quiet", help="Silence tqdm", action="store_true")
   rprt.add_argument("--save", help="Where to save the model", type=str, default="models/model.pt")
   rprt.add_argument("--log", help="Where to save log of arguments", type=str, default="log.json")
@@ -244,7 +266,6 @@ def arguments():
   rprt.add_argument("--load", help="model to load from", type=str)
   rprt.add_argument("--loss-window", help="# epochs to smooth loss over", type=int, default=250)
   rprt.add_argument("--notraintest", help="Do not test on training set", action="store_true")
-  rprt.add_argument("--sphere_visualize", help="Radius to use for spherical visualization", default=None, type=int)
   rprt.add_argument(
     "--duration-sec", help="Max number of seconds to run this for, s <= 0 implies None",
     type=float, default=0,
@@ -274,6 +295,12 @@ def arguments():
   meta = a.add_argument_group("meta runner parameters")
   meta.add_argument("--torchjit", help="Use torch jit for model", action="store_true")
   meta.add_argument("--train-imgs", help="# training examples", type=int, default=-1)
+  meta.add_argument("--draw-colormap", help="Draw a colormap for each view", action="store_true")
+  meta.add_argument(
+    "--convert-analytic-to-alt", action="store_true",
+    help="Combine a model with an analytic BRDF with a learned BRDF for alternating optimization",
+  )
+  meta.add_argument("--clip-gradients", type=float, default=0, help="If > 0, clip gradients")
 
   ae = a.add_argument_group("auto encoder parameters")
   ae.add_argument("--latent-l2-weight", help="L2 regularize latent codes", type=float, default=0)
@@ -285,7 +312,8 @@ def arguments():
   # runtime checks
   hyper_config.load(args)
   if args.timed_outdir:
-    args.outdir = os.path.join(args.outdir, datetime.today().strftime('%Y-%m-%d-%H:%M:%S'))
+    now = datetime.today().strftime('%Y-%m-%d-%H:%M:%S')
+    args.outdir = os.path.join(args.outdir, f"{args.name}{'@' if args.name != '' else ''}{now}")
   if not os.path.exists(args.outdir): os.mkdir(args.outdir)
 
   if not args.neural_upsample:
@@ -294,6 +322,7 @@ def arguments():
 
   if not args.not_magma: plt.magma()
 
+  assert(args.valid_freq > 0), "Must pass a valid frequency > 0"
   return args
 
 loss_map = {
@@ -336,9 +365,9 @@ def render(
 
   rays = cam.sample_positions(positions, size=size, with_noise=with_noise)
 
-  if times is not None: return model((rays, times))
-  elif args.data_kind == "pixel-single": return model((rays, positions))
-  return model(rays)
+  if times is not None: return model((rays, times)), rays
+  elif args.data_kind == "pixel-single": return model((rays, positions)), rays
+  return model(rays), rays
 
 def sqr(x): return x * x
 
@@ -444,13 +473,16 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
     ref = labels[idxs][:, c0:c0+c2,c1:c1+c3, :]
 
     if light is not None: model.refl.light = light[idxs]
+    # TODO this feels wrong somehow? How to more elegantly handle case of indexing refl.light
+    elif hasattr(model.refl, "light") and model.refl.light.supports_idx:
+      model.refl.light.set_idx(torch.tensor(idxs, device=device))
 
     # omit items which are all darker with some likelihood. This is mainly used when
     # attempting to focus on learning the refl and not the shape.
     if args.omit_bg and (i % args.save_freq) != 0 and (i % args.valid_freq) != 0 and \
       ref.mean() + 0.3 < sqr(random.random()): continue
 
-    out = render(model, cam[idxs], crop, size=args.render_size, times=ts, args=args)
+    out, rays = render(model, cam[idxs], crop, size=args.render_size, times=ts, args=args)
     loss = loss_fn(out, ref)
     assert(loss.isfinite()), f"Got {loss.item()} loss"
     l2_loss = loss.item()
@@ -460,26 +492,22 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
     }
     if sched is not None: display["lr"] = f"{sched.get_last_lr()[0]:.1e}"
 
-    if args.backing_sdf:
-      eik = sdf.eikonal_loss(model.sdf.normals)
-      s = sdf.sigmoid_loss(model.min_along_rays, model.nerf.acc())
-      loss = loss + eik + s
+    if args.latent_l2_weight > 0: loss = loss + model.nerf.latent_l2_loss * latent_l2_weight
 
-    if args.latent_l2_weight > 0:
-      loss = loss + model.nerf.latent_l2_loss * latent_l2_weight
+    if args.dnerf_tf_smooth_weight > 0: loss = loss + args.dnerf_tf_smooth_weight * model.delta_smoothness
 
-    # experiment with emptying the model at the beginning
-    if args.sparsify_alpha > 0: loss = loss + args.sparsify_alpha * (model.nerf.alpha).square().mean()
-    if args.dnerf_tf_smooth_weight > 0:
-      loss = loss + args.dnerf_tf_smooth_weight * model.delta_smoothness
-
+    pts = None
     # prepare one set of points for either smoothing normals or eikonal.
     if args.sdf_eikonal > 0 or args.smooth_normals > 0:
-      pts = 10*(torch.rand(((1<<13) * 5)//4 , 3, device=device, requires_grad=True)-0.5)
+      # NOTE the number of points just fits in memory, can modify it at will
+      pts = 5*(torch.randn(((1<<13) * 5)//4 , 3, device=device))
       n = model.sdf.normals(pts)
 
     # E[d sdf(x)/dx] = 1, enforces that the SDF is valid.
     if args.sdf_eikonal > 0: loss = loss + args.sdf_eikonal * utils.eikonal_loss(n)
+
+    if args.volsdf_scale_decay > 0: loss = loss + args.volsdf_scale_decay * model.scale_post_act
+
 
     # dn/dx -> 0, hopefully smoothes out the local normals of the surface.
     if args.smooth_normals > 0:
@@ -487,31 +515,71 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
       if s_eps > 0:
         if args.smooth_eps_rng: s_eps = random.random() * s_eps
         # epsilon-perturbation implementation from unisurf
-        perturbation = F.normalize(torch.randn_like(pts), dim=-1) * s_eps
-        delta_n = n - model.sdf.normals(pts + perturbation)
+        perturb = F.normalize(torch.randn_like(pts), dim=-1) * s_eps
+        delta_n = n - model.sdf.normals(pts + perturb)
       else:
         delta_n = torch.autograd.grad(
           inputs=pts, outputs=F.normalize(n, dim=-1), create_graph=True,
           grad_outputs=torch.ones_like(n),
         )[0]
-      # TODO should this be mean or sum? Unisurf uses sum but should be equivalent
-      # TODO this ord can either be 1 or 2? probably have a flag for it.
-      smoothness = torch.linalg.norm(delta_n, ord=1, dim=-1).sum() + \
-                   torch.linalg.norm(delta_n, ord=2, dim=-1).sum()
-      if args.display_smoothness: display["n-smooth"] = smoothness.item()
+      smoothness = 0
+      for o in args.smooth_n_ord:
+        smoothness = smoothness + torch.linalg.norm(delta_n, ord=o, dim=-1).sum()
+      if args.display_smoothness: display["n-*"] = smoothness.item()
       loss = loss + args.smooth_normals * smoothness
 
-    if args.volsdf_scale_decay > 0:
-      loss = loss + args.volsdf_scale_decay * model.scale_post_act
+    # smooth_both occlusion and the normals on the surface
+    if args.smooth_surface > 0:
+      model_ts = model.nerf.ts[:, None, None, None, None]
+      depth_region = nerf.volumetric_integrate(model.nerf.weights, model_ts)[0,...]
+      r_o, r_d = rays.split([3,3], dim=-1)
+      isect = r_o + r_d * depth_region
+      perturb = F.normalize(torch.randn_like(isect), dim=-1) * 1e-3
+      surface_normals = model.sdf.normals(isect)
+      delta_n = surface_normals - model.sdf.normals(isect + perturb)
+      smoothness = 0
+      for o in args.smooth_n_ord:
+        smoothness = smoothness + torch.linalg.norm(delta_n, ord=o, dim=-1).sum()
+      if args.display_smoothness: display["n-s"] = smoothness.item()
+      loss = loss + args.smooth_surface * smoothness
+      if args.surface_eikonal > 0: loss = loss + args.surface_eikonal * utils.eikonal_loss(surface_normals)
+
+      # smooth occ on the surface
+    if args.smooth_occ > 0 and args.smooth_surface > 0:
+      noise = torch.randn([*isect.shape[:-1], model.total_latent_size()], device=device)
+      elaz = dir_to_elev_azim(torch.randn_like(isect, requires_grad=False))
+      isect_elaz = torch.cat([isect, elaz], dim=-1)
+      att = model.occ.attenuation(isect_elaz, noise).sigmoid()
+      perturb = F.normalize(torch.randn_like(isect_elaz), dim=-1) * 5e-2
+      att_shifted = model.occ.attenuation(isect_elaz + perturb, noise)
+      loss = loss + args.smooth_surface * (att - att_shifted).abs().mean()
+
+    # smoothing the shadow, randomly over points and directions.
+    if args.smooth_occ > 0:
+      if pts is None:
+        pts = 5*(torch.randn(((1<<13) * 5)//4 , 3, device=device, requires_grad=True))
+      elaz = dir_to_elev_azim(torch.randn_like(pts, requires_grad=True))
+      pts_elaz = torch.cat([pts, elaz], dim=-1)
+      noise = torch.randn(pts.shape[0], model.total_latent_size(),device=device)
+      att = model.occ.attenuation(pts_elaz, noise).sigmoid()
+      perturb = F.normalize(torch.randn_like(pts_elaz), dim=-1) * 1e-2
+      att_shifted = model.occ.attenuation(pts_elaz + perturb, noise)
+      loss = loss + args.smooth_occ * (att - att_shifted).abs().mean()
 
     update(display)
     losses.append(l2_loss)
 
     assert(loss.isfinite().item()), "Got NaN loss"
     loss.backward()
+    if args.clip_gradients > 0: nn.utils.clip_grad_norm_(model.parameters(), args.clip_gradients)
     opt.step()
     if sched is not None: sched.step()
+    if args.inc_fourier_freqs:
+      for module in model.modules():
+        if not isinstance(module, FourierEncoder): continue
+        module.scale_freqs()
 
+    # Save outputs within the cropped region.
     if i % args.valid_freq == 0:
       with torch.no_grad():
         ref0 = ref[0,...,:3]
@@ -527,9 +595,10 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
           depth = (raw_depth[0,...]-args.near)/(args.far - args.near)
           items.append(depth.clamp(min=0, max=1))
           if args.normals_from_depth:
-            depth_normal = (utils.depth_to_normals(depth)+1)/2
+            depth_normal = (50*utils.depth_to_normals(depth)+1)/2
             items.append(depth_normal.clamp(min=0, max=1))
         save_plot(os.path.join(args.outdir, f"valid_{i:05}.png"), *items)
+
     if i % args.save_freq == 0 and i != 0:
       save(model, args)
       save_losses(args, losses)
@@ -546,12 +615,6 @@ def test(model, cam, labels, args, training: bool = True, light=None):
   ls = []
   gots = []
 
-  ii, jj = torch.meshgrid(
-    torch.arange(args.render_size, device=device, dtype=torch.float),
-    torch.arange(args.render_size, device=device, dtype=torch.float),
-  )
-  positions = torch.stack([ii.transpose(-1, -2), jj.transpose(-1, -2)], dim=-1)
-
   with torch.no_grad():
     for i in range(labels.shape[0]):
       ts = None if times is None else times[i:i+1, ...]
@@ -559,18 +622,22 @@ def test(model, cam, labels, args, training: bool = True, light=None):
       got = torch.zeros_like(exp)
       normals = torch.zeros_like(got)
       depth = torch.zeros(*got.shape[:-1], 1, device=got.device, dtype=torch.float)
-      if args.backing_sdf: got_sdf = torch.zeros_like(got)
+
       if light is not None: model.refl.light = light[i:i+1]
+      # TODO this feels wrong somehow? How to more elegantly handle case of indexing refl.light
+      elif hasattr(model.refl, "light") and model.refl.light.supports_idx:
+        model.refl.light.set_idx(torch.tensor([i], device=device))
 
       N = math.ceil(args.render_size/args.crop_size)
       for x in range(N):
         for y in range(N):
           c0 = x * args.crop_size
           c1 = y * args.crop_size
-          out = render(
+          out, rays = render(
             model, cam[i:i+1, ...], (c0,c1,args.crop_size,args.crop_size), size=args.render_size,
             with_noise=False, times=ts, args=args,
-          ).squeeze(0)
+          )
+          out = out.squeeze(0)
           got[c0:c0+args.crop_size, c1:c1+args.crop_size, :] = out
 
           if hasattr(model, "nerf") and args.depth_images:
@@ -579,8 +646,6 @@ def test(model, cam, labels, args, training: bool = True, light=None):
               nerf.volumetric_integrate(model.nerf.weights, model_ts)[0,...]
           if hasattr(model, "n") and hasattr(model, "nerf") :
             if args.depth_query_normal and args.depth_images:
-              positions_crop = positions[c0:c0+args.crop_size, c1:c1+args.crop_size, :]
-              rays = cam[i:i+1].sample_positions(positions_crop,size=args.render_size,with_noise=False)
               r_o, r_d = rays.squeeze(0).split([3,3], dim=-1)
               depth_region = depth[c0:c0+args.crop_size, c1:c1+args.crop_size]
               isect = r_o + r_d * depth_region
@@ -600,16 +665,22 @@ def test(model, cam, labels, args, training: bool = True, light=None):
       ts = "" if ts is None else f",t={ts.item():.02f}"
       print(f"[{i:03}{ts}]: L2 {loss.item():.03f} PSNR {psnr:.03f}")
       name = f"train_{i:03}.png" if training else f"test_{i:03}.png"
-      name = os.path.join(args.outdir, name)
       items = [exp, got.clamp(min=0, max=1)]
-      if hasattr(model, "n") and hasattr(model, "nerf"): items.append(normals.clamp(min=0,max=1))
+      if hasattr(model, "n") and hasattr(model, "nerf"):
+        normals = normals.clamp(min=0, max=1)
+        items.append(normals)
+        #save_image(os.path.join(args.outdir, f"normals_{i:03}.png"), normals)
       if (depth != 0).any() and args.normals_from_depth:
-        depth_normals = (utils.depth_to_normals(depth * 50)+1)/2
+        depth_normals = (utils.depth_to_normals(depth * 100)+1)/2
         items.append(depth_normals)
       if hasattr(model, "nerf") and args.depth_images:
         depth = (depth-args.near)/(args.far - args.near)
         items.append(depth.clamp(min=0, max=1))
-      save_plot(name, *items)
+      if args.draw_colormap:
+        colormap = utils.color_map(cam[i:i+1])
+        items.append(colormap)
+      save_plot(os.path.join(args.outdir, name), *items)
+      #save_image(os.path.join(args.outdir, f"got_{i:03}.png"), got)
       ls.append(psnr)
 
   print(f"""[Summary ({"training" if training else "test"})]:
@@ -618,13 +689,16 @@ def test(model, cam, labels, args, training: bool = True, light=None):
 \tmax {max(ls):.03f}
 \tvar {np.var(ls):.03f}""")
   if args.msssim_loss:
-    msssim = utils.msssim_loss(gots, labels)
-    print(f"\tms-ssim {msssim:.03f}")
+    with torch.no_grad():
+      msssim = utils.msssim_loss(gots, labels)
+      print(f"\tms-ssim {msssim:.03f}")
 
 # Sets these parameters on the model on each run, regardless if loaded from previous state.
 def set_per_run(model, args):
+  if args.epochs == 0: return
+  if isinstance(model, nerf.CommonNeRF): model.steps = args.steps
   if not isinstance(model, nerf.VolSDF): args.volsdf_scale_decay = 0
-  if len(args.replace) == 0: return
+
   ls = model.total_latent_size()
   if "occ" in args.replace:
     if args.occ_kind != None and hasattr(model, "occ"):
@@ -639,15 +713,50 @@ def set_per_run(model, args):
     elif hasattr(model, "nerf"): model.nerf.set_bg(args.bg)
   if "sigmoid" in args.replace and hasattr(model, "nerf"):
     model.nerf.set_sigmoid(args.sigmoid_kind)
+  if "light" in args.replace:
+    if isinstance(model.refl, refl.LightAndRefl):
+      model.refl.light = light.load(args)
+    else: raise NotImplementedError("TODO convert to light and reflectance")
 
   if args.model == "sdf": return
-  if not hasattr(model, "nerf"): return
-  #if args.sigmoid_kind != "curr": model.nerf.set_sigmoid(args.sigmoid_kind)
 
   # converts from a volsdf with direct integration to one with indirect lighting
   if args.volsdf_direct_to_path:
+    print("[note]: Converting VolSDF direct integration to path")
     assert(isinstance(model, nerf.VolSDF)), "--volsdf-direct-to-path only applies to VolSDF"
-    model.convert_to_path(args.path_learn_missing)
+    did_convert = model.convert_to_path()
+    if did_convert: model = model.to(device)
+    else: print("[note]: Model already uses pathtracing, nothing changed.")
+
+  if not hasattr(model, "occ") or not isinstance(model.occ, renderers.AllLearnedOcc):
+    if args.smooth_occ != 0:
+      print("[warn]: Zeroing smooth occ since it does not apply")
+      args.smooth_occ = 0
+  if args.convert_analytic_to_alt:
+    assert(hasattr(model, "refl")), "Model does not have a reflectance in the right place"
+    if not isinstance(model.refl, refl.AlternatingOptimization) \
+      and not (isinstance(model.refl, refl.LightAndRefl) and \
+        isinstance(model.refl.refl, refl.AlternatingOptimization)):
+      new_alt_opt = lambda old: refl.AlternatingOptimization(
+        old_analytic=model.refl.refl,
+        latent_size=ls,
+        act = args.sigmoid_kind,
+        out_features=args.feature_space,
+        normal = args.normal_kind,
+        space = args.space_kind,
+      )
+      # need to change the nested feature
+      if isinstance(model.refl, refl.LightAndRefl): model.refl.refl = new_alt_opt(model.refl.refl)
+      else: model.refl = new_alt_opt(model.refl)
+      model.refl = model.refl.to(device)
+    else: print("[note]: redundant alternating optimization, ignoring")
+
+  if hasattr(model, "refl"):
+    if isinstance(model.refl, refl.AlternatingOptimization):
+      model.refl.toggle(args.alt_train == "analytic")
+    elif isinstance(model.refl, refl.LightAndRefl) and isinstance(model.refl.refl, refl.AlternatingOptimization):
+      model.refl.refl.toggle(args.alt_train == "analytic")
+
 
 
 def load_model(args):
@@ -656,7 +765,7 @@ def load_model(args):
   if args.model != "ae": args.latent_l2_weight = 0
   mip = utils.load_mip(args)
   per_pixel_latent_size = 64 if args.data_kind == "pixel-single" else 0
-  per_pt_latent_size = (1 + 3 + 64) if args.backing_sdf else 0
+  per_pt_latent_size = 0
   instance_latent_size = 0
   kwargs = {
     "mip": mip,
@@ -668,7 +777,6 @@ def load_model(args):
     "per_pixel_latent_size": per_pixel_latent_size,
     "per_point_latent_size": per_pt_latent_size,
     "instance_latent_size": instance_latent_size,
-    "sigmoid_kind": args.sigmoid_kind,
     "sigmoid_kind": args.sigmoid_kind if args.sigmoid_kind != "curr" else "thin",
     "bg": args.bg,
   }
@@ -684,7 +792,6 @@ def load_model(args):
     constructor = nerf.VolSDF
     kwargs["sdf"] = sdf.load(args, with_integrator=False)
     kwargs["occ_kind"] = args.occ_kind
-    kwargs["w_missing"] = args.path_learn_missing
     kwargs["integrator_kind"] = args.integrator_kind or "direct"
   else: raise NotImplementedError(args.model)
   model = constructor(**kwargs).to(device)
@@ -695,8 +802,7 @@ def load_model(args):
     refl_inst = refl.load(args, args.refl_kind, args.space_kind, ls).to(device)
     model.set_refl(refl_inst)
 
-  if args.model == "ae" and args.latent_l2_weight > 0:
-    model.set_regularize_latent()
+  if args.model == "ae" and args.latent_l2_weight > 0: model.set_regularize_latent()
 
   if args.mpi: model = MPI(canonical=model, device=device)
 
@@ -721,7 +827,6 @@ def load_model(args):
     model = nerf.SinglePixelNeRF(model, encoder=encoder, img=args.img, device=device).to(device)
 
   og_model = model
-  if args.backing_sdf: model = sdf.SDFNeRF(model, sdf.SDF()).to(device)
   # tack on neural upsampling if specified
   if args.neural_upsample:
     upsampler =  Upsampler(
@@ -750,34 +855,8 @@ def save(model, args):
   else: torch.save(model, args.save)
   if args.log is not None:
     setattr(args, "curr_time", datetime.today().strftime('%Y-%m-%d-%H:%M:%S'))
-    with open(args.log, 'w') as f:
+    with open(os.path.join(args.outdir, args.log), 'w') as f:
       json.dump(args.__dict__, f, indent=2)
-
-def sphere_visualize(args, model):
-  # TODO check this
-  for i in range(args.sphere_visualize):
-    for j in range(args.sphere_visualize):
-      p = utils.spherical_pose(math.pi/(2 * j), 2 * math.pi/i, args.far + 1)
-      cam = cameras.OrthogonalCamera(
-        pos=p,
-        at=torch.tensor([0,0,0], requires_grad=False),
-        up=torch.tensor([0,1,0], requires_grad=False),
-        view_width=args.far - args.near,
-      )
-
-      got = torch.zeros(args.render_size, args.render_size, 3, device=device)
-      N = math.ceil(args.render_size/args.crop_size)
-      for x in range(N):
-        for y in range(N):
-          c0 = x * args.crop_size
-          c1 = y * args.crop_size
-          out = render(
-            model, cam[i:i+1, ...], (c0,c1,args.crop_size,args.crop_size), size=args.render_size,
-            with_noise=False, args=args,
-          ).squeeze(0)
-          got[c0:c0+args.crop_size, c1:c1+args.crop_size, :] = out
-      save_image(os.path.join(args.outdir, f"visualize_{i:03}_{j:03}.png"), got)
-
 
 def seed(s):
   if s == -1: return
@@ -790,6 +869,7 @@ def main():
   seed(args.seed)
 
   labels, cam, light = loaders.load(args, training=True, device=device)
+  setattr(args, "num_labels", len(labels))
   if args.train_imgs > 0:
     if type(labels) == tuple: labels = tuple(l[:args.train_imgs, ...] for l in labels)
     else: labels = labels[:args.train_imgs, ...]
@@ -798,10 +878,18 @@ def main():
   model = load_model(args) if args.load is None else torch.load(args.load, map_location=device)
   set_per_run(model, args)
 
-  if args.train_parts == "all": parameters = model.parameters()
-  elif args.train_parts == "refl": parameters = model.refl.parameters()
-  elif args.train_parts == "camera": raise NotImplementedError("TODO")
-  else: raise NotImplementedError()
+  if "all" in args.train_parts: parameters = model.parameters()
+  else:
+    parameters = []
+    if "refl" in args.train_parts:
+      assert(hasattr(model, "refl")), "Model must have a reflectance parameter to optimize over"
+      parameters.append(model.refl.parameters())
+    if "occ" in args.train_parts:
+      assert(hasattr(model, "occ")), "Model must have occlusion field (maybe internal bug)"
+      parameters.append(model.occ.parameters())
+    if "camera" in args.train_parts:
+      parameters.append(cam.parameters())
+    parameters = chain(*parameters)
 
   # for some reason AdamW doesn't seem to work here
   # eps = 1e-7 was in the original paper.
@@ -818,9 +906,6 @@ def main():
   if args.notest: return
   test_labels, test_cam, test_light = loaders.load(args, training=False, device=device)
   test(model, test_cam, test_labels, args, training=False, light=test_light)
-
-  if args.sphere_visualize is not None:
-    sphere_visualize(args, model)
 
 if __name__ == "__main__": main()
 

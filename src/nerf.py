@@ -4,10 +4,12 @@ import torch.nn.functional as F
 import random
 
 from .neural_blocks import (
-  SkipConnMLP, UpdateOperator, FourierEncoder, PositionalEncoder, NNEncoder
+  SkipConnMLP, UpdateOperator, FourierEncoder, PositionalEncoder, NNEncoder,
+  EncodedGRU,
 )
 from .utils import (
-  dir_to_elev_azim, autograd, sample_random_hemisphere, laplace_cdf, load_sigmoid,
+  dir_to_elev_azim, autograd, laplace_cdf, load_sigmoid,
+  sample_random_hemisphere, sample_random_sphere,
 )
 import src.refl as refl
 from .renderers import ( load_occlusion_kind, direct )
@@ -168,7 +170,11 @@ class CommonNeRF(nn.Module):
     else:
       raise NotImplementedError(f"Unexpected bg: {bg}")
 
-  def set_sigmoid(self, kind="thin"): self.feat_act = load_sigmoid(kind)
+  def set_sigmoid(self, kind="thin"):
+    act = load_sigmoid(kind)
+    self.feat_act = act
+    if isinstance(self.refl, refl.LightAndRefl): self.refl.refl.act = act
+    else: self.refl.act = act
   def sky_from_mlp(self, elaz_r_d, weights):
     return (1-weights.sum(dim=0)).unsqueeze(-1) * fat_sigmoid(self.sky_mlp(elaz_r_d))
   def total_latent_size(self) -> int:
@@ -219,11 +225,11 @@ class CommonNeRF(nn.Module):
       else self.per_pt_latent
 
     if self.per_pixel_latent is not None:
-      ppl = self.per_pixel_latent[None, ...].expand(pts.shape[:-1] + (-1,))
+      ppl = self.per_pixel_latent[None, ...].expand(pts_shape[:-1] + (-1,))
       curr = torch.cat([curr, ppl], dim=-1)
 
     if self.instance_latent is not None:
-      il = self.instance_latent[None, :, None, None, :].expand_as(pts.shape[:-1] + (-1,))
+      il = self.instance_latent[None, :, None, None, :].expand(pts_shape[:-1] + (-1,))
       curr = torch.cat([curr, il], dim=-1)
 
     return curr
@@ -411,6 +417,7 @@ class NeRFAE(CommonNeRF):
     return color + sky
 
 def identity(x): return x
+
 # https://arxiv.org/pdf/2106.12052.pdf
 class VolSDF(CommonNeRF):
   def __init__(
@@ -420,9 +427,8 @@ class VolSDF(CommonNeRF):
     device: torch.device = "cuda",
 
     occ_kind=None,
-    w_missing:bool = False,
     integrator_kind="direct",
-    scale_softplus=True,
+    scale_softplus=False,
     **kwargs,
   ):
     super().__init__(**kwargs, device=device)
@@ -437,30 +443,22 @@ class VolSDF(CommonNeRF):
         f"Must have light w/ volsdf integration {type(self.sdf.refl)}"
       self.occ = load_occlusion_kind(occ_kind, self.sdf.latent_size)
       if integrator_kind == "direct": self.secondary = self.direct
-      elif integrator_kind == "path": self.convert_to_path(w_missing)
+      elif integrator_kind == "path": self.convert_to_path()
       else: raise NotImplementedError(f"unknown integrator kind {integrator_kind}")
-  def convert_to_path(self, w_missing: bool):
-        if self.secondary == self.path: return
-        self.secondary = self.path
-        self.path_n = N = 3
-        missing_cmpts = 3 * (N + 1) + 6
+  def convert_to_path(self):
+    if self.secondary == self.path: return False
+    self.secondary = self.path
+    self.path_n = N = 3
+    missing_cmpts = 3 * (N + 1) + 6
 
-        # this is a function of the seen pts and the sampled lighting dir
-        self.missing = None
-        if w_missing:
-          self.missing = SkipConnMLP(
-            in_size=missing_cmpts, out=self.out_features, enc=FourierEncoder(input_dims=missing_cmpts),
-            # here we care about the aggregate set of all point, so bundle them all up.
-            latent_size = self.sdf.latent_size * (N + 1),
-            hidden_size=512,
-          )
-
-        self.transfer_fn = SkipConnMLP(
-          in_size=6, out=1, enc=FourierEncoder(input_dims=6),
-          # multiply by two here ince it's the pair of latent values at sets of point
-          latent_size = self.sdf.latent_size * 2,
-          hidden_size=512,
-        )
+    # transfer_fn := G(x1, x2) -> [0,1]
+    self.transfer_fn = SkipConnMLP(
+      in_size=6, out=1, enc=FourierEncoder(input_dims=6),
+      # multiply by two here ince it's the pair of latent values at sets of point
+      latent_size = self.sdf.latent_size * 2,
+      hidden_size=512,
+    )
+    return True
   def direct(self, r_o, weights, pts, view, n, latent):
     out = torch.zeros_like(pts)
     for light in self.sdf.refl.light.iter():
@@ -471,19 +469,24 @@ class VolSDF(CommonNeRF):
   def path(self, r_o, weights, pts, view, n, latent):
     out = torch.zeros_like(pts)
 
-    N = self.path_n # number of samples for 1st order bounces
+    # number of samples for 1st order bounces
+    N = self.path_n if self.training else 10
 
     # for each point sample some number of directions
-    dirs = sample_random_hemisphere(n, num_samples=N)
+    # dirs = sample_random_hemisphere(n, num_samples=N)
+    dirs = sample_random_sphere(n, num_samples=N)
     # compute intersection of random directions with surface
     ext_pts, ext_hits, dists, _ = march.bisect(
-      self.sdf.underlying, pts[None,...].expand_as(dirs), dirs, iters=64, near=5e-3, far=10,
+      self.sdf.underlying, pts[None,...].expand_as(dirs), dirs, iters=64, near=5e-3, far=6,
     )
-    decays = 1/dists.square().clamp(min=1e-8)
+    # TODO does not decay with the square of distance, need to add in a flag for this
+    # if the model assumes that it does.
+    # decays = 1/dists.square().clamp(min=1e-8)
 
     ext_sdf_vals, ext_latent = self.sdf.from_pts(ext_pts)
 
-    ext_view = F.normalize(ext_pts - r_o[None,None,...], eps=1e-6, dim=-1)
+    ext_view = F.normalize(ext_pts - r_o[None,None,...], dim=-1)
+    # detach secondary normals
     ext_n = F.normalize(self.sdf.normals(ext_pts), dim=-1).detach()
 
     fit = lambda x: x.unsqueeze(0).expand(N,-1,-1,-1,-1,-1)
@@ -491,13 +494,12 @@ class VolSDF(CommonNeRF):
     first_step_bsdf = self.sdf.refl(
       x=fit(pts), view=ext_view, normal=fit(n), light=-dirs, latent=fit(latent),
     )
-    # compute transfer function (G) between ext_pts and pts
+    # compute transfer function (G) between ext_pts and pts (which is a proxy for the density).
     tf = self.transfer_fn(
       torch.cat([ext_pts, pts.unsqueeze(0).expand_as(ext_pts)],dim=-1),
       torch.cat([ext_latent, latent.unsqueeze(0).expand_as(ext_latent)], dim=-1),
     ).sigmoid()
-    # bsdf = light decay * transfer function * transfer fn
-    first_step_bsdf = first_step_bsdf * decays * tf
+    first_step_bsdf = first_step_bsdf * tf # * decays
 
     for light in self.sdf.refl.light.iter():
       # compute direct lighting at each point (identical to direct)
@@ -511,32 +513,15 @@ class VolSDF(CommonNeRF):
         x=ext_pts, view=dirs, normal=ext_n, light=ext_light_dir, latent=ext_latent,
       )
       second_step = ext_light_val * path_bsdf
-      # TODO add missing to second step as a multiplication of each component?
-      #print(first_step.shape, second_step.shape)
       # sum over the contributions at each point adding with each secondary contribution
       secondary = (first_step_bsdf * second_step).sum(dim=0)
       out = out + secondary
-      # because we have high sampling variance, add in a secondary component which accounts for
-      # unsampled values by taking the points sampled and the current set of points.
-      # This makes it possible to learn outside of the scope of what is possible, but should
-      #  converge faster?
-      # we explicitly allow it to be negative in case the points we pick are all sampled with
-      # super high value.
-      if self.missing is None: continue
-      missing = self.missing(
-        torch.cat([
-          ext_pts.reshape((*ext_pts.shape[1:-1], 3 * N)), pts, light_dir, view,
-        ], dim=-1),
-        torch.cat([
-          ext_latent.reshape((*ext_latent.shape[1:-1], self.sdf.latent_size * N)), latent,
-        ], dim=-1),
-      )
-      missing = self.feat_act(missing)
-      out = out + missing
+
     return out
   def forward(self, rays):
     pts, ts, r_o, r_d = compute_pts_ts(
-      rays, self.t_near, self.t_far, self.steps, perturb = 1 if self.training else 0,
+      rays, self.t_near, self.t_far, self.steps,
+      perturb = 1 if self.training else 0,
     )
     self.ts = ts
     return self.from_pts(pts, ts, r_o, r_d)
@@ -552,11 +537,8 @@ class VolSDF(CommonNeRF):
     if mip_enc is not None: latent = torch.cat([latent, mip_enc], dim=-1)
 
     sdf_vals, latent = self.sdf.from_pts(pts)
-    # turn this line on if things are broken due to not having a scale_act.
-    #if not hasattr(self, "scale_act"): self.scale_act = identity
     scale = self.scale_act(self.scale)
     self.scale_post_act = scale
-    #if not self.training: scale = scale.clamp(max=1e-5)
     density = 1/scale * laplace_cdf(-sdf_vals, scale)
     self.alpha, self.weights = alpha_from_density(density, ts, r_d, softplus=False)
 
@@ -571,7 +553,67 @@ class VolSDF(CommonNeRF):
     return volumetric_integrate(self.weights, rgb)
   def set_sigmoid(self, kind="thin"):
     if not hasattr(self, "sdf"): return
-    self.sdf.refl.act = load_sigmoid(kind)
+    act = load_sigmoid(kind)
+    if isinstance(self.refl, refl.LightAndRefl): self.refl.refl.act = act
+    else: self.refl.act = act
+
+class RecurrentNeRF(CommonNeRF):
+  def __init__(
+    self,
+    intermediate_size: int = 64,
+    out_features: int = 3,
+
+    device: torch.device = "cuda",
+
+    **kwargs,
+  ):
+    super().__init__(**kwargs, device=device)
+    self.latent_size = self.total_latent_size()
+
+    self.first = EncodedGRU(
+      encs=[
+        FourierEncoder(input_dims=3, sigma=1<<1, device=device),
+        FourierEncoder(input_dims=3, sigma=1<<2, device=device),
+        FourierEncoder(input_dims=3, sigma=1<<3, device=device),
+        FourierEncoder(input_dims=3, sigma=1<<3, device=device),
+        FourierEncoder(input_dims=3, sigma=1<<4, device=device),
+        FourierEncoder(input_dims=3, sigma=1<<4, device=device),
+        FourierEncoder(input_dims=3, sigma=1<<5, device=device),
+      ],
+      state_size=256,
+      in_size=3, out=1,
+      latent_out=intermediate_size,
+    )
+
+    self.refl = refl.View(
+      out_features=out_features,
+      latent_size=self.latent_size+intermediate_size,
+    )
+
+  def forward(self, rays):
+    pts, ts, r_o, r_d = compute_pts_ts(
+      rays, self.t_near, self.t_far, self.steps, perturb = 1 if self.training else 0,
+    )
+    self.ts = ts
+    return self.from_pts(pts, ts, r_o, r_d)
+
+  def from_pts(self, pts, ts, r_o, r_d):
+    latent = self.curr_latent(pts.shape)
+
+    densities, intermediate = self.first(pts, latent if latent.shape[-1] != 0 else None)
+    acc_density = (torch.cumsum(densities, dim=-1) - densities).detach() + densities
+    if self.training and self.noise_std > 0:
+      acc_density = acc_density + torch.randn_like(acc_density) * self.noise_std
+
+    view = r_d[None, ...].expand_as(pts)
+    rgb = self.refl(x=pts, view=view, latent=torch.cat([latent, intermediate], dim=-1))
+    images = []
+    for i in range(acc_density.shape[-1]):
+      density = acc_density[..., i]
+      alpha, weights = alpha_from_density(density, ts, r_d)
+      img = volumetric_integrate(weights, rgb)
+      images.append(img)
+    return images
 
 def alternating_volsdf_loss(model, nerf_loss, sdf_loss):
   def aux(x, ref): return nerf_loss(x, ref[..., :3]) if model.vol_render else sdf_loss(x, ref)
@@ -635,7 +677,7 @@ class DynamicNeRF(nn.Module):
         activation=nn.Softplus(),
         zero_init=True,
       )
-    self.time_noise_std = 1e-2
+    self.time_noise_std = 3e-3
     self.smooth_delta = False
     self.delta_smoothness = 0
 

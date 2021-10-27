@@ -3,6 +3,12 @@ PHONY:
 clean:
 	-@rm outputs/*.png
 
+original: clean
+	python3 -O runner.py -d data/nerf_synthetic/lego/ --data-kind original \
+	--size 64 --crop --epochs 80_000 --save models/lego.pt \
+	--near 2 --far 6 --batch-size 4 --crop-size 26 --model plain -lr 1e-3 \
+	--loss-fns l2 --valid-freq 499 --refl-kind view #--load models/lego.pt #--omit-bg
+
 volsdf: clean
 	python3 runner.py -d data/nerf_synthetic/lego/ --data-kind original \
 	--size 128 --crop --epochs 30_000 --crop-size 16 \
@@ -42,15 +48,13 @@ nerf-sh: clean
 
 nerfactor_volsdf: clean
 	python3 runner.py -d data/nerfactor/${nerfactor_ds}/ \
-	--data-kind original --size 128 --crop --epochs 25_000 --crop-size 18 \
-	--near 2 --far 6 --batch-size 5 --model volsdf --sdf-kind siren \
-	-lr 1e-3 --loss-window 750 --valid-freq 250 \
-	--loss-fns l2 --color-spaces rgb --save-freq 2500 --sigmoid-kind leaky_relu \
-	--refl-kind view --save models/${nerfactor_ds}-volsdf.pt --depth-images \
-	--normals-from-depth \
-  --notest \
-  --sdf-eikonal 1e-2 \
-  --load models/${nerfactor_ds}-volsdf.pt \
+	--data-kind original --size 256 --crop --epochs 50_000 --crop-size 11 \
+	--near 2 --far 6 --batch-size 4 --model volsdf --sdf-kind mlp \
+	-lr 1e-4 --loss-window 750 --valid-freq 250 --light-kind field --occ-kind all-learned \
+	--loss-fns l2 rmse --color-spaces rgb xyz hsv --save-freq 2500 --sigmoid-kind leaky_relu \
+	--refl-kind diffuse --save models/${nerfactor_ds}-volsdf.pt --depth-images \
+	--normals-from-depth --notest --sdf-eikonal 1e-t \
+  --load models/${nerfactor_ds}-volsdf.pt --depth-query-normal \
   #--smooth-normals 1e-2 --smooth-eps-rng \
 
 nerfactor_volsdf_direct: clean
@@ -121,6 +125,17 @@ dtu: clean
 	--loss-fns l2 --valid-freq 499 --sdf-kind mlp \
 	--loss-window 1000 --sdf-eikonal 0.1 --sigmoid-kind fat --load models/dtu$(scan_number).pt
 
+dtu_diffuse: clean
+	python3 runner.py -d data/DTU/scan$(scan_number)/ --data-kind dtu \
+	--size 256 --crop --epochs 25_000 --save models/dtu_diffuse_$(scan_number).pt \
+	--near 0.3 --far 2 --batch-size 3 --crop-size 12 --model volsdf -lr 3e-4 --light-kind field \
+	--loss-fns l2 rmse --color-spaces rgb hsv xyz --valid-freq 500 --sdf-kind mlp \
+  --refl-kind fourier --refl-order 32 --occ-kind all-learned \
+  --depth-images --depth-query-normal --normals-from-depth --msssim-loss \
+  --smooth-surface 1e-2 --save-freq 2500 --notraintest \
+	--loss-window 1000 --sdf-eikonal 1 --sigmoid-kind leaky_relu --replace refl sigmoid \
+  --load models/dtu_diffuse_$(scan_number).pt
+
 # -- Begin NeRV tests
 
 # hotdogs | armadillo, fun datasets :)
@@ -129,15 +144,89 @@ nerv_point: clean
 	python3 runner.py -d data/nerv_public_release/${nerv_dataset}/ \
 	--data-kind nerv_point --model volsdf --sdf-kind mlp \
 	--save models/nerv_${nerv_dataset}.pt \
-	--size 200 --crop --crop-size 14 --epochs 50_000 --loss-window 1500 \
-	--near 2 --far 6 --batch-size 4 -lr 8e-4 --refl-kind rusin \
+	--size 64 --crop --crop-size 14 --epochs 80_000  --loss-window 1500 \
+	--near 2 --far 6 --batch-size 4 -lr 5e-4 --refl-kind rusin \
 	--sdf-eikonal 1 --light-kind dataset --seed -1 \
-	--loss-fns l2 rmse --valid-freq 500 --occ-kind all-learned \
-  --color-spaces rgb hsv xyz --depth-images --depth-query-normal \
+	--loss-fns l2 rmse --valid-freq 500 --save-freq 2500 --occ-kind all-learned \
+  --color-spaces rgb xyz hsv --depth-images --depth-query-normal \
   --sigmoid-kind upshifted_softplus --skip-loss 100 \
-  --smooth-normals 1e-2 --smooth-eps 1e-3 --notraintest \
+  --notraintest --draw-colormap \
   --normals-from-depth --msssim-loss --depth-query-normal --display-smoothness \
-  --load models/nerv_${nerv_dataset}.pt
+  #--load models/nerv_${nerv_dataset}.pt \
+  # --smooth-normals 1e-5 --smooth-eps 1e-3 --smooth-surface 1e-5 \
+
+nerv_point_diffuse: clean
+	python3 runner.py -d data/nerv_public_release/${nerv_dataset}/ \
+	--data-kind nerv_point --model volsdf --sdf-kind mlp \
+	--save models/nerv_diffuse_${nerv_dataset}.pt --nosave \
+	--size 100 --crop --crop-size 11 --epochs 25_000  --loss-window 1500 \
+	--near 2 --far 6 --batch-size 4 -lr 3e-4 --refl-kind diffuse \
+	--sdf-eikonal 1 --light-kind dataset --seed -1 \
+	--loss-fns l2 rmse --valid-freq 500 --save-freq 2500 \
+  --occ-kind learned-const --replace occ \
+  --color-spaces rgb xyz hsv --depth-images --depth-query-normal \
+  --sigmoid-kind leaky_relu --skip-loss 100 \
+  --notraintest --clip-gradients 1 \
+  --normals-from-depth --msssim-loss --depth-query-normal --display-smoothness \
+  --load models/nerv_diffuse_${nerv_dataset}.pt
+
+nerv_point_diffuse_unknown_lighting:
+	python3 runner.py -d data/nerv_public_release/${nerv_dataset}/ \
+	--data-kind nerv_point --model volsdf --sdf-kind mlp \
+	--save models/nerv_diff_ul_${nerv_dataset}.pt \
+	--size 200 --crop --crop-size 11 --epochs 50_000  --loss-window 1500 \
+	--near 2 --far 6 --batch-size 4 -lr 1e-4 --refl-kind diffuse \
+	--sdf-eikonal 1 --light-kind field --seed -1 \
+	--loss-fns l2 rmse --valid-freq 500 --save-freq 2500 --occ-kind all-learned \
+  --color-spaces rgb xyz hsv --depth-images --depth-query-normal \
+  --sigmoid-kind sin --skip-loss 100 \
+  --notraintest --replace sigmoid --clip-gradients 1 \
+  --normals-from-depth --msssim-loss --depth-query-normal --display-smoothness \
+  #--load models/nerv_diff_ul_${nerv_dataset}.pt
+
+nerv_point_diffuse_to_learned: clean
+	python3 runner.py -d data/nerv_public_release/${nerv_dataset}/ \
+  --name learned_from_diffuse${nerv_dataset} \
+	--data-kind nerv_point --model volsdf --sdf-kind mlp \
+	--save models/nerv_from_diffuse_${nerv_dataset}.pt \
+	--size 200 --crop --crop-size 14 --epochs 50_000  --loss-window 1500 \
+	--near 2 --far 6 --batch-size 4 -lr 8e-4 \
+	--sdf-eikonal 1 --light-kind dataset --seed -1 \
+	--loss-fns l2 rmse --valid-freq 500 --save-freq 2500 --occ-kind all-learned \
+  --color-spaces rgb hsv xyz --depth-images --depth-query-normal \
+  --sigmoid-kind tanh --skip-loss 100 \
+  --notraintest \
+  --normals-from-depth --msssim-loss --depth-query-normal --display-smoothness \
+  --train-parts refl occ --convert-analytic-to-alt \
+  --load models/nerv_diffuse_${nerv_dataset}.pt \
+  #--load models/nerv_from_diffuse_${nerv_dataset}.pt
+
+# converts a model to a pathtraced model
+nerv_point_alt_to_pathtrace: clean
+	python3 runner.py -d data/nerv_public_release/${nerv_dataset}/ \
+  --name pathtrace_${nerv_dataset} \
+	--data-kind nerv_point \
+	--save models/nerv_path_final_${nerv_dataset}.pt \
+	--size 32 --crop --crop-size 6 --epochs 50_000  --loss-window 1500 \
+	--near 2 --far 6 --batch-size 3 -lr 2e-4 \
+	--sdf-eikonal 1 --light-kind dataset --seed -1 \
+	--loss-fns l2 rmse --valid-freq 500 --save-freq 2500 --occ-kind all-learned \
+  --color-spaces rgb hsv xyz --depth-images --depth-query-normal --skip-loss 100 \
+  --notraintest --normals-from-depth --msssim-loss --depth-query-normal --display-smoothness \
+  --volsdf-direct-to-path \
+  --load models/nerv_diffuse_${nerv_dataset}.pt \
+  #--load models/nerv_from_diffuse_${nerv_dataset}.pt
+
+nerv_point_final: clean
+	python3 runner.py -d data/nerv_public_release/${nerv_dataset}/ \
+  --name final_${nerv_dataset} \
+	--data-kind nerv_point \
+	--load models/nerv_path_final_${nerv_dataset}.pt \
+	--size 200 --crop --crop-size 6 --epochs 0 \
+	--near 2 --far 6 --batch-size 3 --light-kind dataset \
+  --depth-images --depth-query-normal \
+  --notraintest --normals-from-depth --msssim-loss --depth-query-normal \
+  --nosave
 
 nerv_point_sdf: clean
 	python3 runner.py -d data/nerv_public_release/${nerv_dataset}/ \
@@ -168,14 +257,16 @@ nerv_point_path: clean
 	python3 runner.py -d data/nerv_public_release/${nerv_dataset}/ \
 	--data-kind nerv_point --model volsdf --sdf-kind mlp \
 	--save models/nerv_path_${nerv_dataset}.pt \
-	--size 32 --crop --crop-size 6 --epochs 25_000 --loss-window 500 \
+	--size 32 --crop --crop-size 6 --epochs 20_000 --loss-window 500 \
 	--near 2 --far 6 --batch-size 3 -lr 5e-4 --refl-kind rusin \
 	--sdf-eikonal 0.1 --light-kind dataset --seed -1 \
-	--loss-fns l2 rmse --valid-freq 500 --occ-kind all-learned \
-  --color-spaces rgb xyz hsv --save-freq 1000 \
-  --integrator-kind path --depth-images --notraintest --skip-loss 100 \
-  --smooth-normals 1e-2 --decay 1e-5 --normals-from-depth \
-  --load models/nerv_path_${nerv_dataset}.pt #--path-learn-missing
+	--loss-fns l2 --valid-freq 500 --occ-kind all-learned \
+  --color-spaces rgb --save-freq 1000 \
+  --integrator-kind path --depth-images --notraintest --skip-loss 500 \
+  --smooth-eps 2e-3 --smooth-occ 1e-3 --sigmoid-kind upshifted_softplus \
+  --normals-from-depth --msssim-loss --depth-query-normal --display-smoothness \
+  --smooth-normals 1e-3 --normals-from-depth \
+  #--load models/nerv_path_${nerv_dataset}.pt #--path-learn-missing
 
 nerv_point_subrefl: clean
 	python3 runner.py -d data/nerv_public_release/${nerv_dataset}/ \
@@ -189,13 +280,23 @@ nerv_point_subrefl: clean
   --notraintest --omit-bg \
   --load models/nerv_weighted_${nerv_dataset}.pt
 
-# -- End NeRV tests
+nerv_point_fourier: clean
+	python3 runner.py -d data/nerv_public_release/${nerv_dataset}/ \
+	--data-kind nerv_point --model volsdf --sdf-kind mlp \
+	--save models/nerv_fourier_${nerv_dataset}.pt \
+	--size 200 --crop --crop-size 14 --epochs 50_000 --loss-window 1500 \
+	--near 2 --far 6 --batch-size 4 -lr 8e-4 --refl-kind fourier \
+	--sdf-eikonal 0.1 --light-kind dataset --seed -1 \
+	--loss-fns l2 rmse --valid-freq 500 --occ-kind all-learned \
+  --color-spaces rgb hsv xyz \
+  --notraintest --depth-images \
+  --smooth-normals 1e-3 --smooth-eps 1e-3 --notraintest \
+  --normals-from-depth --msssim-loss --depth-query-normal --display-smoothness \
+  --smooth-surface 1e-3 --sdf-isect-kind bisect \
+  --draw-colormap \
+  --load models/nerv_fourier_${nerv_dataset}.pt
 
-original: clean
-	python3 -O runner.py -d data/nerf_synthetic/lego/ --data-kind original \
-	--size 256 --crop --epochs 25_000 --save models/lego.pt \
-	--near 2 --far 6 --batch-size 4 --crop-size 40 --model plain -lr 1e-3 \
-	--loss-fns l2 --valid-freq 499 --refl-kind view --load models/lego.pt #--omit-bg
+# -- End NeRV tests
 
 test_original: clean
 	python3 -O runner.py -d data/nerf_synthetic/lego/ --data-kind original \
@@ -258,3 +359,10 @@ eval_rusin:
 fieldgan: clean
 	python3 fieldgan.py --image data/mondrian.jpg --epochs 2500
 	#python3 fieldgan.py --image data/food/images/IMG_1268.png --epochs 2500
+
+rnn_nerf: clean
+	python3 -O rnn_runner.py -d data/nerf_synthetic/lego/ --data-kind original \
+	--size 256 --crop --epochs 7_500 --save models/rnn_lego.pt \
+	--near 2 --far 6 --batch-size 4 --crop-size 12 -lr 1e-3 \
+  --save-freq 2500 \
+	--loss-fns l2 --valid-freq 499 --load models/rnn_lego.pt

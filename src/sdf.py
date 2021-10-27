@@ -6,7 +6,7 @@ import random
 
 from .nerf import ( CommonNeRF, compute_pts_ts )
 from .neural_blocks import ( SkipConnMLP, FourierEncoder, NNEncoder )
-from .utils import ( autograd, eikonal_loss, smooth_min )
+from .utils import ( autograd, eikonal_loss, smooth_min, leaky_softplus )
 import src.refl as refl
 import src.march as march
 import src.renderers as renderers
@@ -126,13 +126,14 @@ class SDF(nn.Module):
     return pts, hit, tput, self.normals(pts)
   def intersect_mask(self, r_o, r_d, near=None, far=None, eps=1e-3):
     with torch.no_grad():
-      return ~march.sphere_march(
+      best_pts, hits, best_dist, throughput = march.bisect(
         self.underlying, r_o, r_d, eps=eps,
         near=self.near if near is None else near,
         far=self.far if far is None else far,
         # since this is just for intersection, alright to use fewer steps
-        iters=64 if self.training else 128,
-      )[1]
+        iters=32 if self.training else 128,
+      )
+      return ~hits, throughput, best_pts
   def forward(self, rays, with_throughput=True):
     r_o, r_d = rays.split([3,3], dim=-1)
     pts, hit, t, tput = self.isect(
@@ -249,10 +250,7 @@ class Triangles(SDFModel):
     # apply thickness to each triangle to allow certain ones to take up more space.
     out = out.squeeze(-1) - 4e-2
     # smooth min or just normal union?
-    out = smooth_min(out,dim=-1).reshape(p.shape[:-1] + (1,))
-    #if out.numel() == 0: return out.reshape(p.shape[:-1] + (1,))
-    #out = out.min(dim=-1)[0].reshape(p.shape[:-1] + (1,))
-    return out
+    return smooth_min(out,dim=-1).reshape(p.shape[:-1] + (1,))
 
 class MLP(SDFModel):
   def __init__(
@@ -262,7 +260,7 @@ class MLP(SDFModel):
     super().__init__(**kwargs)
     self.mlp = SkipConnMLP(
       in_size=3, out=1+self.latent_size,
-      enc=FourierEncoder(input_dims=3),
+      enc=FourierEncoder(input_dims=3, sigma=1<<4),
       num_layers=6, hidden_size=256,
       xavier_init=True,
     )
@@ -305,64 +303,3 @@ class Local(SDFModel):
     local = x % self.part_sz
     latent = self.latent(x/self.part_sz)
     return self.tform(local, latent)
-
-class SDFNeRF(nn.Module):
-  def __init__(
-    self,
-    nerf: CommonNeRF,
-    sdf: SDF,
-  ):
-    super().__init__()
-    self.nerf = nerf
-    self.sdf = sdf
-    self.min_along_rays = None
-  def forward(self, rays):
-    pts, ts, r_o, r_d = compute_pts_ts(rays, self.nerf.t_near, self.nerf.t_far, self.nerf.steps)
-    sdf_vals = self.sdf(pts)
-    # record mins along rays for backprop
-    self.min_along_rays = sdf_vals.min(dim=0)[0]
-    # values (useful for density), normals (useful for view), latent (useful for ???)
-    sdf_latent = torch.cat([sdf_vals, self.sdf.normals, self.sdf.mlp.last_layer_out], dim=-1)
-    self.nerf.set_per_pt_latent(sdf_latent)
-    return self.nerf.from_pts(pts, ts, r_o, r_d)
-  @property
-  def density(self): return self.nerf.density
-  def render(self, rays):
-    r_o, r_d = rays.split([3,3], dim=-1)
-    pts, hits, ts = self.sdf.isect(r_o, r_d, near=self.nerf.t_near, far=self.nerf.t_far)
-    # TODO convert vals to some RGB value
-    vals = torch.ones_like(pts)
-    raise NotImplementedError()
-    return torch.where(hits, vals, torch.zeros_like(vals))
-
-#@torch.jit.script
-def masked_loss(img_loss=F.mse_loss):
-  # masked loss takes some image loss, such as l2, l1 or ssim, and then applies it with an
-  # additional loss on the alpha channel.
-  def aux(
-    # got and exp have 4 channels, where the last are got_mask and exp_mask
-    got, exp,
-    mask_weight:int=1
-  ):
-    got, got_mask = got.split([3,1],dim=-1)
-    exp, exp_mask = exp.split([3,1],dim=-1)
-    active = ((got_mask > 0) & (exp_mask > 0)).squeeze(-1)
-    misses = ~active
-
-    color_loss = 0
-    if active.any():
-      got_active = got[active]
-      exp_active = exp[active]
-      color_loss = img_loss(got_active, exp_active)
-
-    # this case is hit if the mask intersects nothing
-    mask_loss = 0
-    if misses.any():
-      loss_fn = F.binary_cross_entropy_with_logits
-      mask_loss = loss_fn(
-        got_mask[misses].reshape(-1, 1),
-        exp_mask[misses].reshape(-1, 1),
-      )
-    return mask_weight * mask_loss + color_loss
-
-  return aux
