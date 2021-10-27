@@ -202,6 +202,12 @@ test_original: clean
 	--size 64 --crop --epochs 0 --near 2 --far 6 --batch-size 5 \
   --crop-size 26 --load models/lego.pt
 
+fvr: clean
+	python3 -O runner.py -d data/lego_ortho/ --data-kind ortho \
+	--size 256 --crop --epochs 25_000 --save models/lego_ortho.pt \
+	--near 2 --far 6 --batch-size 4 --crop-size 40 --model fvr -lr 1e-3 \
+	--loss-fns l2 --valid-freq 499 --refl-kind view #--load models/lego_ortho.pt #--omit-bg
+
 ae: clean
 	python3 -O runner.py -d data/nerf_synthetic/lego/ --data-kind original \
 	--size 64 --crop --epochs 80_000 --save models/lego_ae.pt \

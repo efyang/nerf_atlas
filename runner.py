@@ -20,6 +20,7 @@ from itertools import chain
 
 import src.loaders as loaders
 import src.nerf as nerf
+import src.fvrnerf as fvrnerf
 import src.utils as utils
 import src.sdf as sdf
 import src.refl as refl
@@ -39,7 +40,7 @@ def arguments():
     "--data-kind", help="Kind of data to load", default="original",
     choices=[
       "original", "single_video", "dnerf", "dtu", "pixel-single", "nerv_point",
-      "shiny"
+      "shiny", "ortho"
     ],
   )
   a.add_argument(
@@ -78,7 +79,7 @@ def arguments():
   )
   a.add_argument(
     "--model", help="which model do we want to use", type=str,
-    choices=["tiny", "plain", "ae", "volsdf", "sdf"], default="plain",
+    choices=["tiny", "plain", "ae", "volsdf", "sdf", "fvr"], default="plain",
   )
   a.add_argument(
     "--bg", help="What kind of background to use for NeRF", type=str,
@@ -673,6 +674,8 @@ def load_model(args):
   }
   if args.model == "tiny": constructor = nerf.TinyNeRF
   elif args.model == "plain": constructor = nerf.PlainNeRF
+  elif args.model == "fvr":
+    constructor = fvrnerf.FVRNeRF
   elif args.model == "ae":
     constructor = nerf.NeRFAE
     kwargs["normalize_latent"] = args.normalize_latent

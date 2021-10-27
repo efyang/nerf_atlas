@@ -61,13 +61,15 @@ class NeRFCamera(Camera):
     return torch.cat([r_o, r_d], dim=-1)
 
 @dataclass
-class FVRNeRFCamera(NeRFCamera):
+class FVRNeRFCamera(Camera):
   cam_to_world:torch.tensor = None
-  focal: float=None
+  ortho_scale: float=None
   device:str ="cuda"
+  
+  def __len__(self): return self.cam_to_world.shape[0]
 
   def __getitem__(self, v):
-    return FVRNeRFCamera(cam_to_world=self.cam_to_world[v], focal=self.focal, device=self.device)
+    return FVRNeRFCamera(cam_to_world=self.cam_to_world[v], ortho_scale=self.ortho_scale, device=self.device)
 
   def sample_positions(
     self,
@@ -82,18 +84,23 @@ class FVRNeRFCamera(NeRFCamera):
       u = u + (torch.rand_like(u)-0.5)*with_noise
       v = v + (torch.rand_like(v)-0.5)*with_noise
 
+    s = torch.stack([
+        (u - size * 0.5)/size * self.ortho_scale,
+        -(v - size * 0.5)/size * self.ortho_scale,
+        torch.zeros_like(u),
+    ], dim=-1)
+    # TODO: check that this actually make sense
     d = torch.stack([
-        (u - size * 0.5) / self.focal,
-        -(v - size * 0.5) / self.focal,
+        torch.zeros_like(u),
+        torch.zeros_like(u),
         -torch.ones_like(u),
     ], dim=-1)
     r_d = torch.sum(d[..., None, :] * self.cam_to_world[..., :3, :3], dim=-1)
+    slice_positions = torch.sum(s[..., None, :] * self.cam_to_world[..., :3, :3], dim=-1)
     r_d = r_d.permute(2,0,1,3) # [H, W, B, 3] -> [B, H, W, 3]
-    r_o = self.cam_to_world[..., :3, -1][:, None, None, :].expand_as(r_d)
-    # return all the ray origins
-    return r_o # [B, H, W, 3]
-
-
+    slice_positions = slice_positions.permute(2,0,1,3) # [H, W, B, 3] -> [B, H, W, 3]
+    # return the slice through the origin parallel to image plane
+    return torch.cat([slice_positions, r_d], dim=-1)
 
 def vec2skew(v):
   zero = torch.zeros(v.shape[:-1] + (1,), device=v.device, dtype=v.dtype)

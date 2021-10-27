@@ -34,6 +34,13 @@ def load(args, training=True, device="cuda"):
       with_mask = with_mask,
       device=device,
     )
+  elif kind == "ortho":
+    return ortho(
+      args.data, training=training, normalize=False, size=size,
+      white_bg=args.bg=="white",
+      with_mask = with_mask,
+      device=device,
+    )
   elif kind == "nerv_point":
     return nerv_point(
       args.data, training=training, size=size,
@@ -95,7 +102,7 @@ def original(
 
   return exp_imgs, cameras.NeRFCamera(cam_to_worlds, focal), None
 
-def fvrnerf(
+def ortho(
   dir=".", normalize=True, training=True, size=256, white_bg=False, with_mask=False,
   device="cuda",
 ):
@@ -105,7 +112,8 @@ def fvrnerf(
 
   exp_imgs = []
   cam_to_worlds = []
-  focal = 0.5 * size / np.tan(0.5 * float(tfs['camera_angle_x']))
+  ortho_scale = float(tfs['camera_ortho_scale'])
+  print(ortho_scale)
   for i, frame in enumerate(tfs["frames"]):
     fp = frame['file_path']
     if fp == "":
@@ -114,8 +122,8 @@ def fvrnerf(
     img = load_image(os.path.join(dir, fp + '.png'), resize=(size, size))
     if white_bg: img = img[..., :3]*img[..., -1:] + (1-img[..., -1:])
     exp_imgs.append(img[..., :channels])
-    tf_mat = torch.tensor(frame['transform_matrix'], dtype=torch.float, device=device)[:3, :4]
-    if normalize: tf_mat[:3, 3] = F.normalize(tf_mat[:3, 3], dim=-1)
+    tf_mat = torch.tensor(frame['transform_matrix'], dtype=torch.float, device=device)
+    if normalize: tf_mat = F.normalize(tf_mat, dim=-1)
     cam_to_worlds.append(tf_mat)
 
   cam_to_worlds = torch.stack(cam_to_worlds, dim=0).to(device)
@@ -123,7 +131,7 @@ def fvrnerf(
   if with_mask:
     exp_imgs[..., -1] = (exp_imgs[..., -1] - 1e-5).ceil()
 
-  return exp_imgs, cameras.FVRNeRFCamera(cam_to_worlds, focal), None
+  return exp_imgs, cameras.FVRNeRFCamera(cam_to_worlds, ortho_scale), None
 
 def dnerf(
   dir=".", normalize=False, training=True,
