@@ -173,8 +173,8 @@ class CommonNeRF(nn.Module):
   def set_sigmoid(self, kind="thin"):
     act = load_sigmoid(kind)
     self.feat_act = act
-    if isinstance(self.refl, refl.LightAndRefl): self.refl.refl.act = act
-    else: self.refl.act = act
+    # if isinstance(self.refl, refl.LightAndRefl): self.refl.refl.act = act
+    # else: self.refl.act = act
   def sky_from_mlp(self, elaz_r_d, weights):
     return (1-weights.sum(dim=0)).unsqueeze(-1) * fat_sigmoid(self.sky_mlp(elaz_r_d))
   def total_latent_size(self) -> int:

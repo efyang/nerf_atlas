@@ -105,6 +105,7 @@ class SkipConnMLP(nn.Module):
 
     zero_init = False,
     xavier_init = False,
+    kaiming_init = False,
   ):
     super(SkipConnMLP, self).__init__()
     self.in_size = in_size
@@ -141,6 +142,9 @@ class SkipConnMLP(nn.Module):
       for t in biases: nn.init.zeros_(t)
     if xavier_init:
       for t in weights: nn.init.xavier_uniform_(t)
+      for t in biases: nn.init.zeros_(t)
+    if kaiming_init:
+      for t in weights: nn.init.kaiming_normal_(t, mode='fan_out')
       for t in biases: nn.init.zeros_(t)
 
     self.activation = activation

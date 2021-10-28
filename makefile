@@ -305,9 +305,14 @@ test_original: clean
 
 fvr: clean
 	python3 -O runner.py -d data/lego_ortho/ --data-kind ortho \
-	--size 32 --epochs 100_000 --save models/lego_ortho.pt \
-	--batch-size 32 --model fvr -lr 1e-3 --save-freq=500 --clip-gradient 1 \
-	--loss-fns l2 --valid-freq 250 --refl-kind view --load models/lego_ortho.pt #--omit-bg
+	--size 128 --epochs 10_000 --save models/lego_ortho_l2.pt \
+	--batch-size 10	--model fvr -lr 1e-3 --save-freq=500 \
+	--loss-fns l2 --valid-freq 250 --refl-kind fvrview --sigmoid-kind leaky_relu --clip-gradients 1e-2 # --load models/lego_ortho_l2.pt #--omit-bg
+
+test_fvr: clean
+	python3 -O runner.py -d data/lego_ortho/ --data-kind ortho \
+	--size 32 --epochs 0  \
+	--model fvr --refl-kind fvrview --sigmoid-kind leaky_relu --load models/lego_ortho_l2.pt #--omit-bg
 
 ae: clean
 	python3 -O runner.py -d data/nerf_synthetic/lego/ --data-kind original \

@@ -29,6 +29,7 @@ def load(args, refl_kind:str, space_kind:str, latent_size:int):
   if cons is None: raise NotImplementedError(f"refl kind: {args.refl_kind}")
   if refl_kind == "basic":
     if args.light_kind is not None: kwargs["light"] = "elaz"
+  elif refl_kind == "fvrview": kwargs["out_features"] = 6
   elif refl_kind == "fourier": kwargs["order"] = args.refl_order
   elif refl_kind == "sph-har": kwargs["order"] = args.refl_order
   elif refl_kind == "weighted":
@@ -178,6 +179,28 @@ class Basic(Reflectance):
     light = self.light_enc(light)
     v = torch.cat([v for v in [x, view, normal, light] if v is not None], dim=-1)
     return self.act(self.mlp(v, latent))
+
+# view reflectance takes a view direction and a latent vector, and nothing else.
+class FVRView(Reflectance):
+  def __init__(
+    self,
+    space=None,
+
+    view="elaz",
+    **kwargs,
+  ):
+    super().__init__(**kwargs)
+    view_dims, self.view_enc = enc_norm_dir(view)
+    in_size = view_dims
+    self.mlp = SkipConnMLP(
+      in_size=in_size, out=self.out_features, latent_size=self.latent_size,
+      enc=FourierEncoder(input_dims=in_size),
+      num_layers=5, hidden_size=128, xavier_init=True,
+    )
+  def forward(self, x, view, normal=None, light=None, latent=None):
+    v = self.view_enc(view)
+    act = self.act(self.mlp(v))
+    return act * x
 
 # view reflectance takes a view direction and a latent vector, and nothing else.
 class View(Reflectance):
@@ -600,6 +623,7 @@ refl_kinds = {
   "basic": Basic,
   "diffuse": Diffuse,
   "rusin": Rusin,
+  "fvrview": FVRView,
   # classical models with some order mechanism
   "sph-har": SphericalHarmonic,
   "fourier": FourierBasis,
