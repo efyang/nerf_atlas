@@ -485,8 +485,8 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
     out, rays = render(model, cam[idxs], crop, size=args.render_size, times=ts, args=args)
     if isinstance(model, fvrnerf.FVRNeRF):
       out, out_fft = out
-      ref_fft = torch.fft.fftn(ref, dim=(1,2))
-      # loss = loss_fn(out_fft.real, ref_fft.real) * 10.0 + loss_fn(out_fft.imag, ref_fft.imag) * 10.0  + loss_fn(out, ref)
+      # ref_fft = torch.fft.fftn(ref, dim=(1,2))
+      # loss = (loss_fn(out_fft.real, ref_fft.real) + loss_fn(out_fft.imag, ref_fft.imag))  + loss_fn(out, ref)
       loss = loss_fn(out, ref)
     else:
       loss = loss_fn(out, ref)
@@ -649,6 +649,7 @@ def test(model, cam, labels, args, training: bool = True, light=None):
           got[c0:c0+args.crop_size, c1:c1+args.crop_size, :] = out
 
           if hasattr(model, "nerf") and args.depth_images:
+            print("volu integrate")
             model_ts = model.nerf.ts[:, None, None, None, None]
             depth[c0:c0+args.crop_size, c1:c1+args.crop_size, :] = \
               nerf.volumetric_integrate(model.nerf.weights, model_ts)[0,...]
@@ -662,6 +663,7 @@ def test(model, cam, labels, args, training: bool = True, light=None):
               too_far_mask = depth_region > (args.far - 1e-1)
               normals[c0:c0+args.crop_size, c1:c1+args.crop_size][too_far_mask[...,0]] = 0
             else:
+              print("volu integrate")
               render_n = nerf.volumetric_integrate(model.nerf.weights, model.n)
               normals[c0:c0+args.crop_size, c1:c1+args.crop_size, :] = (render_n[0]+1)/2
           elif hasattr(model, "n") and hasattr(model, "sdf"):
