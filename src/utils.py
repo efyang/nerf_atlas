@@ -186,6 +186,18 @@ def load_image(src, resize=None):
   if resize is not None: img = img.resize(resize)
   return torch.from_numpy(np.array(img, dtype=float)/255).float()
 
+def rotation_matrix(a, b, c, device="cuda"):
+  ra = torch.stack([torch.Tensor([a.cos(), -a.sin(), 0]),
+                    torch.Tensor([a.sin(), a.cos(), 0]),
+                    torch.Tensor([0, 0, 1])]).to(device)
+  rb = torch.stack([torch.Tensor([b.cos(), 0, b.sin()]),
+                    torch.Tensor([0, 1, 0]),
+                    torch.Tensor([-b.sin(), 0, b.cos()])]).to(device)
+  rc = torch.stack([torch.Tensor([1, 0, 0]),
+                    torch.Tensor([0, c.cos(), -c.sin()]),
+                    torch.Tensor([0, c.sin(), c.cos()])]).to(device)
+  return ra * rb * rc
+
 # [-1, 1] -> [-pi/2, pi/2]
 #@torch.jit.script
 def uv_to_elev_azim(uv):

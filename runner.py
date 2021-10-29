@@ -360,8 +360,9 @@ def render(
   )
 
   positions = torch.stack([ii.transpose(-1, -2), jj.transpose(-1, -2)], dim=-1)
-  t,l,h,w = crop
-  positions = positions[t:t+h,l:l+w,:]
+  if not isinstance(model, fvrnerf.FVRNeRF):
+    t,l,h,w = crop
+    positions = positions[t:t+h,l:l+w,:]
 
   rays = cam.sample_positions(positions, size=size, with_noise=with_noise)
 
@@ -485,8 +486,11 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
     out, rays = render(model, cam[idxs], crop, size=args.render_size, times=ts, args=args)
     if isinstance(model, fvrnerf.FVRNeRF):
       out, out_fft = out
-      # ref_fft = torch.fft.fftn(ref, dim=(1,2))
-      # loss = (loss_fn(out_fft.real, ref_fft.real) + loss_fn(out_fft.imag, ref_fft.imag))  + loss_fn(out, ref)
+      ref_fft = torch.fft.fftn(ref, dim=(1,2))
+      # loss = (loss_fn(out_fft.real, ref_fft.real) + loss_fn(out_fft.imag, ref_fft.imag))**2 + loss_fn(out, ref)
+      # by itself, doesnt really converge
+      # loss = (loss_fn(out_fft.real, ref_fft.real) + loss_fn(out_fft.imag, ref_fft.imag))
+      # converges slowly
       loss = loss_fn(out, ref)
     else:
       loss = loss_fn(out, ref)
@@ -635,39 +639,46 @@ def test(model, cam, labels, args, training: bool = True, light=None):
         model.refl.light.set_idx(torch.tensor([i], device=device))
 
       N = math.ceil(args.render_size/args.crop_size)
-      for x in range(N):
-        for y in range(N):
-          c0 = x * args.crop_size
-          c1 = y * args.crop_size
-          out, rays = render(
-            model, cam[i:i+1, ...], (c0,c1,args.crop_size,args.crop_size), size=args.render_size,
-            with_noise=False, times=ts, args=args,
-          )
-          if isinstance(model, fvrnerf.FVRNeRF):
-            out, out_fft = out
-          out = out.squeeze(0)
-          got[c0:c0+args.crop_size, c1:c1+args.crop_size, :] = out
+      if isinstance(model, fvrnerf.FVRNeRF):
+        out, rays = render(
+          model, cam[i:i+1, ...], None, size=args.render_size,
+          with_noise=False, times=ts, args=args,
+        )
+        out, out_fft = out
+        out = out.squeeze(0)
+        got = out
+      else:
+        for x in range(N):
+          for y in range(N):
+            c0 = x * args.crop_size
+            c1 = y * args.crop_size
+            out, rays = render(
+              model, cam[i:i+1, ...], (c0,c1,args.crop_size,args.crop_size), size=args.render_size,
+              with_noise=False, times=ts, args=args,
+            )
+            out = out.squeeze(0)
+            got[c0:c0+args.crop_size, c1:c1+args.crop_size, :] = out
 
-          if hasattr(model, "nerf") and args.depth_images:
-            print("volu integrate")
-            model_ts = model.nerf.ts[:, None, None, None, None]
-            depth[c0:c0+args.crop_size, c1:c1+args.crop_size, :] = \
-              nerf.volumetric_integrate(model.nerf.weights, model_ts)[0,...]
-          if hasattr(model, "n") and hasattr(model, "nerf") :
-            if args.depth_query_normal and args.depth_images:
-              r_o, r_d = rays.squeeze(0).split([3,3], dim=-1)
-              depth_region = depth[c0:c0+args.crop_size, c1:c1+args.crop_size]
-              isect = r_o + r_d * depth_region
-              normals[c0:c0+args.crop_size, c1:c1+args.crop_size] = \
-                (F.normalize(model.sdf.normals(isect), dim=-1)+1)/2
-              too_far_mask = depth_region > (args.far - 1e-1)
-              normals[c0:c0+args.crop_size, c1:c1+args.crop_size][too_far_mask[...,0]] = 0
-            else:
+            if hasattr(model, "nerf") and args.depth_images:
               print("volu integrate")
-              render_n = nerf.volumetric_integrate(model.nerf.weights, model.n)
-              normals[c0:c0+args.crop_size, c1:c1+args.crop_size, :] = (render_n[0]+1)/2
-          elif hasattr(model, "n") and hasattr(model, "sdf"):
-            ...
+              model_ts = model.nerf.ts[:, None, None, None, None]
+              depth[c0:c0+args.crop_size, c1:c1+args.crop_size, :] = \
+                nerf.volumetric_integrate(model.nerf.weights, model_ts)[0,...]
+            if hasattr(model, "n") and hasattr(model, "nerf") :
+              if args.depth_query_normal and args.depth_images:
+                r_o, r_d = rays.squeeze(0).split([3,3], dim=-1)
+                depth_region = depth[c0:c0+args.crop_size, c1:c1+args.crop_size]
+                isect = r_o + r_d * depth_region
+                normals[c0:c0+args.crop_size, c1:c1+args.crop_size] = \
+                  (F.normalize(model.sdf.normals(isect), dim=-1)+1)/2
+                too_far_mask = depth_region > (args.far - 1e-1)
+                normals[c0:c0+args.crop_size, c1:c1+args.crop_size][too_far_mask[...,0]] = 0
+              else:
+                print("volu integrate")
+                render_n = nerf.volumetric_integrate(model.nerf.weights, model.n)
+                normals[c0:c0+args.crop_size, c1:c1+args.crop_size, :] = (render_n[0]+1)/2
+            elif hasattr(model, "n") and hasattr(model, "sdf"):
+              ...
 
       gots.append(got)
       loss = F.mse_loss(got, exp)
@@ -904,7 +915,7 @@ def main():
 
   # for some reason AdamW doesn't seem to work here
   # eps = 1e-7 was in the original paper.
-  opt = optim.Adam(parameters, lr=args.learning_rate, weight_decay=args.decay, eps=1e-7)
+  opt = optim.AdamW(parameters, lr=args.learning_rate, weight_decay=args.decay, eps=1e-7)
 
   # TODO should T_max = -1 or args.epochs
   sched = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs, eta_min=5e-5)

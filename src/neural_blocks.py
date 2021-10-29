@@ -66,7 +66,7 @@ class LearnedFourierEncoder(nn.Module):
     self.n_freqs = num_freqs
     self.basis = create_fourier_basis(num_freqs, features=input_dims, freq=sigma, device=device)
     self.basis = nn.Parameter(self.basis, requires_grad=False)
-    self.extra_scale = nn.Parameter(torch.tensor(1, requires_grad=True), requires_grad=True)
+    self.extra_scale = nn.Parameter(torch.tensor(1.0, requires_grad=True), requires_grad=True)
   def output_dims(self): return self.n_freqs * 2
   def forward(self, x): return fourier(x, self.extra_scale * self.basis)
 

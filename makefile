@@ -5,7 +5,7 @@ clean:
 
 original: clean
 	python3 -O runner.py -d data/nerf_synthetic/lego/ --data-kind original \
-	--size 64 --crop --epochs 80_000 --save models/lego.pt \
+	--size 32 --crop --epochs 80_000 --save models/lego.pt \
 	--near 2 --far 6 --batch-size 4 --crop-size 26 --model plain -lr 1e-3 \
 	--loss-fns l2 --valid-freq 499 --refl-kind view #--load models/lego.pt #--omit-bg
 
@@ -300,19 +300,19 @@ nerv_point_fourier: clean
 
 test_original: clean
 	python3 -O runner.py -d data/nerf_synthetic/lego/ --data-kind original \
-	--size 64 --crop --epochs 0 --near 2 --far 6 --batch-size 5 \
+	--size 32 --crop --epochs 0 --near 2 --far 6 --batch-size 5 \
   --crop-size 26 --load models/lego.pt
 
 fvr: clean
 	python3 -O runner.py -d data/lego_ortho/ --data-kind ortho \
-	--size 128 --epochs 50_000 --save models/lego_ortho_128.pt \
-	--batch-size 20	--model fvr -lr 1e-3 --save-freq=100 \
-	--loss-fns l2 --valid-freq 25 --refl-kind fvrview --sigmoid-kind leaky_relu --load models/lego_ortho_128.pt #--omit-bg
+	--size 33 --epochs 20_000 --save models/lego_ortho_33.pt \
+	--batch-size 15	--model fvr -lr 1e-3 --save-freq=250 \
+	--loss-fns l2 --valid-freq 100 --refl-kind fvrview --sigmoid-kind leaky_relu # --load models/lego_ortho_129.pt #--omit-bg
 
 test_fvr: clean
 	python3 -O runner.py -d data/lego_ortho/ --data-kind ortho \
-	--size 128 --epochs 0 --batch-size 20  \
-	--model fvr --refl-kind fvrview --sigmoid-kind leaky_relu --load models/lego_ortho_128.pt #--omit-bg
+	--size 33 --epochs 0 --batch-size 5  \
+	--model fvr --refl-kind fvrview --sigmoid-kind leaky_relu --load models/lego_ortho_33.pt #--omit-bg
 
 ae: clean
 	python3 -O runner.py -d data/nerf_synthetic/lego/ --data-kind original \

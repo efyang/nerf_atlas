@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from dataclasses import dataclass
-from .utils import rotate_vector
+from .utils import rotate_vector, rotation_matrix
 from .neural_blocks import ( SkipConnMLP )
 import random
 
@@ -85,22 +85,31 @@ class FVRNeRFCamera(Camera):
       v = v + (torch.rand_like(v)-0.5)*with_noise
 
     s = torch.stack([
-        (u - size * 0.5)/size * self.ortho_scale,
-        -(v - size * 0.5)/size * self.ortho_scale,
+        (u - (size-1) * 0.5)/size * self.ortho_scale,
+        -(v - (size-1) * 0.5)/size * self.ortho_scale,
         torch.zeros_like(u),
     ], dim=-1)
+
     # TODO: check that this actually make sense
     d = torch.stack([
         torch.zeros_like(u),
         torch.zeros_like(u),
         -torch.ones_like(u),
     ], dim=-1)
+
     r_d = torch.sum(d[..., None, :] * self.cam_to_world[..., :3, :3], dim=-1)
     r_d = r_d.permute(2,0,1,3) # [H, W, B, 3] -> [B, H, W, 3]
     slice_positions = torch.sum(s[..., None, :] * self.cam_to_world[..., :3, :3], dim=-1)
+    if with_noise:
+      a, b, c = (torch.rand(3, device=device) - 0.5) * with_noise * math.pi/2
+      s = torch.sum(s[..., None, :] * rotation_matrix(a,b,c), dim=-1)
     slice_positions = slice_positions.permute(2,0,1,3) # [H, W, B, 3] -> [B, H, W, 3]
+
+    slice_positions += (torch.rand_like(slice_positions) - 0.5) * with_noise * 0.1
     # return the slice through the origin parallel to image plane
     return torch.cat([slice_positions, r_d], dim=-1)
+
+
 
 def vec2skew(v):
   zero = torch.zeros(v.shape[:-1] + (1,), device=v.device, dtype=v.dtype)
