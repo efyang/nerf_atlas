@@ -1,4 +1,5 @@
 import torch
+from torch.functional import norm
 import torch.nn as nn
 import torch.nn.functional as F
 import random
@@ -31,9 +32,9 @@ class FVRNeRF(CommonNeRF):
       # in_size=3, out=intermediate_size,
       in_size=3, out=out_features,
       latent_size = self.latent_size,
-      num_layers=8, hidden_size=512,
-      enc=FourierEncoder(input_dims=3, device=device),
-      kaiming_init=True,
+      num_layers=8, hidden_size=256,
+      # enc=FourierEncoder(input_dims=3, device=device),
+      xavier_init=True,
       activation=torch.sin,
     )
 
@@ -52,7 +53,7 @@ class FVRNeRF(CommonNeRF):
     #   enc=FourierEncoder(input_dims=3, device=device),
     #   xavier_init=True,
     # )
-    self.refl = refl.FVRView(
+    self.refl = refl.SphericalHarmonic(
       out_features=out_features,
       # latent_size=self.latent_size+intermediate_size,
       latent_size=0
@@ -76,13 +77,13 @@ class FVRNeRF(CommonNeRF):
     # foutfft = torch.fft.fft(fout, dim=-1)
     # fin2 = torch.cat([foutfft.real, foutfft.imag], dim=-1)
     # fourier = self.mlp2(fin2)
-    # fourier = self.refl(
-    #   x=first_out, view=view,
-    # )
-    re, im = fout.split([3,3], dim=-1)
-    coeff = torch.complex(re, im)
+    fourier = self.refl(
+      x=fout, view=view,
+    )
+    re, im = fourier.split([3,3], dim=-1)
+    coeff = torch.complex(re, im) * pts.size()[1]
 
     fft = torch.fft.ifftshift(coeff, dim=(1,2))
-    img = torch.fft.ifftn(fft, dim=(1,2), s=(pts.size()[1], pts.size()[2]))
+    img = torch.fft.ifftn(fft, dim=(1,2), s=(pts.size()[1], pts.size()[2]), norm="ortho")
     # TODO: maybe need to change norm so not dependent on size
     return (torch.abs(img), coeff) # + self.sky_color(view, self.weights)

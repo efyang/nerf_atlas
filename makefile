@@ -305,13 +305,13 @@ test_original: clean
 
 fvr: clean
 	python3 -O runner.py -d data/lego_ortho/ --data-kind ortho \
-	--size 33 --epochs 20_000 --save models/lego_ortho_33.pt \
-	--batch-size 15	--model fvr -lr 1e-3 --save-freq=250 \
-	--loss-fns l2 --valid-freq 100 --refl-kind fvrview --sigmoid-kind leaky_relu # --load models/lego_ortho_129.pt #--omit-bg
+	--size 65 --epochs 30_000 --save models/lego_ortho_33.pt \
+	--batch-size 50	--model fvr -lr 1e-3 --save-freq=100 --clip-gradients 1e-2 \
+	--loss-fns l2 --valid-freq 50 --refl-kind fvrview --sigmoid-kind leaky_relu --load models/lego_ortho_33.pt #--omit-bg
 
 test_fvr: clean
 	python3 -O runner.py -d data/lego_ortho/ --data-kind ortho \
-	--size 33 --epochs 0 --batch-size 5  \
+	--size 65 --epochs 0 --batch-size 1  \
 	--model fvr --refl-kind fvrview --sigmoid-kind leaky_relu --load models/lego_ortho_33.pt #--omit-bg
 
 ae: clean

@@ -6,6 +6,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
 import matplotlib.pyplot as plt
+import gc
+# need for mem leak
+# https://github.com/matplotlib/matplotlib/issues/20490
+import matplotlib
+matplotlib.use('agg')
 
 def create_fourier_basis(batch_size, features=3, freq=40, device="cuda"):
   B = freq * torch.randn(batch_size, features, device=device).T
@@ -155,7 +160,13 @@ def save_plot(name, expected, *got):
     plt.grid("off");
     plt.axis("off");
   plt.savefig(name, bbox_inches='tight')
+  # need all these to avoid leaking mem
+  # https://stackoverflow.com/questions/7101404/how-can-i-release-memory-after-creating-matplotlib-figures
+  plt.cla()
+  plt.clf()
+  plt.close('all')
   plt.close(fig)
+  gc.collect()
 
 # https://en.wikipedia.org/wiki/Rodrigues%27_rotation_formula
 # c = cosine of theta, s = sine of theta

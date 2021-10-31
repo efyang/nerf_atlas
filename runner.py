@@ -431,6 +431,7 @@ def load_loss_fn(args, model):
 # train the model with a given camera and some labels (imgs or imgs+times)
 # light is a per instance light.
 def train(model, cam, labels, opt, args, light=None, sched=None):
+  torch.autograd.set_detect_anomaly(True)
   if args.epochs == 0: return
 
   loss_fn = load_loss_fn(args, model)
@@ -483,17 +484,21 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
     if args.omit_bg and (i % args.save_freq) != 0 and (i % args.valid_freq) != 0 and \
       ref.mean() + 0.3 < sqr(random.random()): continue
 
-    out, rays = render(model, cam[idxs], crop, size=args.render_size, times=ts, args=args)
+    out, rays = render(model, cam[idxs], crop, size=args.render_size, times=ts, args=args, with_noise=0.1)
     if isinstance(model, fvrnerf.FVRNeRF):
       out, out_fft = out
-      ref_fft = torch.fft.fftn(ref, dim=(1,2))
-      # loss = (loss_fn(out_fft.real, ref_fft.real) + loss_fn(out_fft.imag, ref_fft.imag))**2 + loss_fn(out, ref)
-      # by itself, doesnt really converge
-      # loss = (loss_fn(out_fft.real, ref_fft.real) + loss_fn(out_fft.imag, ref_fft.imag))
-      # converges slowly
-      loss = loss_fn(out, ref)
+      # out *= math.sqrt(args.render_size)
+      ref_fft = torch.fft.fftn(ref, dim=(1,2), norm="ortho")
+      ref_fft = torch.fft.fftshift(ref_fft, dim=(1,2))
+      out = out / args.render_size
+      out_fft = out_fft / args.render_size
+      # ref_fft = ref_fft / args.render_size**2
+      loss = (loss_fn(out_fft.real, ref_fft.real) + loss_fn(out_fft.imag, ref_fft.imag)) + 0.1 * loss_fn(out, ref).sqrt()
+      # converges slowly - learns really garbage freq domain tbh
+      # loss = loss_fn(out, ref)
     else:
       loss = loss_fn(out, ref)
+
     assert(loss.isfinite()), f"Got {loss.item()} loss"
     l2_loss = loss.item()
     display = {
@@ -607,6 +612,16 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
           if args.normals_from_depth:
             depth_normal = (50*utils.depth_to_normals(depth)+1)/2
             items.append(depth_normal.clamp(min=0, max=1))
+
+        if isinstance(model, fvrnerf.FVRNeRF):
+          minre = ref_fft[0,...].real.min()
+          maxre = ref_fft[0,...].real.max()
+          minim = ref_fft[0,...].imag.min()
+          maxim = ref_fft[0,...].imag.max()
+          items.append((ref_fft[0,...].real - minre)/(maxre-minre))
+          items.append((out_fft[0,...].real - minre)/(maxre-minre))
+          items.append((ref_fft[0,...].imag - minim)/(maxim-minim))
+          items.append((out_fft[0,...].imag - minim)/(maxim-minim))
         save_plot(os.path.join(args.outdir, f"valid_{i:05}.png"), *items)
 
     if i % args.save_freq == 0 and i != 0:
@@ -645,7 +660,12 @@ def test(model, cam, labels, args, training: bool = True, light=None):
           with_noise=False, times=ts, args=args,
         )
         out, out_fft = out
-        out = out.squeeze(0)
+        out = out.squeeze(0) / args.render_size
+        out_fft = out_fft.squeeze(0)
+        ref_fft = torch.fft.fftn(exp, dim=(0,1), norm="ortho")
+        ref_fft = torch.fft.fftshift(ref_fft, dim=(0,1))
+        out_fft = out_fft / args.render_size
+        # ref_fft = ref_fft / args.render_size**2
         got = out
       else:
         for x in range(N):
@@ -699,7 +719,16 @@ def test(model, cam, labels, args, training: bool = True, light=None):
         items.append(depth.clamp(min=0, max=1))
       if args.draw_colormap:
         colormap = utils.color_map(cam[i:i+1])
-        items.append(colormap)
+        items.append(colormap) 
+      if isinstance(model, fvrnerf.FVRNeRF):
+        minre = ref_fft[...].real.min()
+        maxre = ref_fft[...].real.max()
+        minim = ref_fft[...].imag.min()
+        maxim = ref_fft[...].imag.max()
+        items.append((ref_fft[...].real - minre)/(maxre-minre))
+        items.append((out_fft[...].real - minre)/(maxre-minre))
+        items.append((ref_fft[...].imag - minim)/(maxim-minim))
+        items.append((out_fft[...].imag - minim)/(maxim-minim))
       save_plot(os.path.join(args.outdir, name), *items)
       #save_image(os.path.join(args.outdir, f"got_{i:03}.png"), got)
       ls.append(psnr)
