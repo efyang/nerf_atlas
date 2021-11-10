@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from dataclasses import dataclass
-from .utils import rotate_vector, rotation_matrix
+from .utils import dir_to_elev_azim, rotate_vector, rotation_matrix, vec_to_spherical_coords
 from .neural_blocks import ( SkipConnMLP )
 import random
 
@@ -80,9 +80,9 @@ class FVRNeRFCamera(Camera):
     device=self.device
     u,v = position_samples.split([1,1], dim=-1)
     # u,v each in range [0, size]
-    if with_noise:
-      u = u + ((torch.randn_like(u))*with_noise).clamp(-with_noise, with_noise)
-      v = v + ((torch.randn_like(v))*with_noise).clamp(-with_noise, with_noise)
+    # if with_noise:
+    #   u = u + ((torch.randn_like(u))*with_noise).clamp(-with_noise, with_noise)
+    #   v = v + ((torch.randn_like(v))*with_noise).clamp(-with_noise, with_noise)
 
     s = torch.stack([
         (u - (size-1) * 0.5) * self.ortho_scale,
@@ -108,6 +108,7 @@ class FVRNeRFCamera(Camera):
 
     slice_positions += (torch.rand_like(slice_positions) - 0.5) * with_noise * 0.1
     # return the slice through the origin parallel to image plane
+    slice_positions = vec_to_spherical_coords(slice_positions)
     return torch.cat([slice_positions, r_d], dim=-1)
 
 

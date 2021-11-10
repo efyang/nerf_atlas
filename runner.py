@@ -28,7 +28,7 @@ import src.cameras as cameras
 import src.hyper_config as hyper_config
 import src.renderers as renderers
 from src.lights import light_kinds
-from src.utils import ( save_image, save_plot, load_image, dir_to_elev_azim )
+from src.utils import ( linear_dist_center_weights, save_image, save_plot, load_image, dir_to_elev_azim )
 from src.neural_blocks import ( Upsampler, SpatialEncoder, StyleTransfer, FourierEncoder )
 
 import os
@@ -372,14 +372,26 @@ def render(
 
 def sqr(x): return x * x
 
-def save_losses(args, losses):
+def save_losses(args, losses, scale="linear"):
   outdir = args.outdir
   window = args.loss_window
 
   window = min(window, len(losses))
   losses = np.convolve(losses, np.ones(window)/window, mode='valid')
   losses = losses[args.skip_loss:]
-  plt.plot(range(len(losses)), losses)
+  plt.figure(figsize=(16,12))
+  plt.title("Training Loss")
+  plt.xlabel("# Epochs")
+  plt.ylabel("Loss")
+  plt.yscale(scale)
+  n_annotations = 10
+  s = len(losses) // n_annotations
+  plt.plot(range(len(losses)), losses, marker='o', markevery=s)
+  for i in range(n_annotations):
+    plt.annotate('%0.2e' % losses[s*i], xy=(s*i, losses[s*i]), xytext=(8, 8), 
+                xycoords=('data', 'data'), textcoords='offset points')
+  plt.annotate('%0.2e' % losses[-1], xy=(len(losses)-1, losses[-1]), xytext=(-4, 8), 
+              xycoords=('data', 'data'), textcoords='offset points')
   plt.savefig(os.path.join(outdir, "training_loss.png"), bbox_inches='tight')
   plt.close()
 
@@ -431,7 +443,7 @@ def load_loss_fn(args, model):
 # train the model with a given camera and some labels (imgs or imgs+times)
 # light is a per instance light.
 def train(model, cam, labels, opt, args, light=None, sched=None):
-  torch.autograd.set_detect_anomaly(True)
+  # torch.autograd.set_detect_anomaly(True)
   if args.epochs == 0: return
 
   loss_fn = load_loss_fn(args, model)
@@ -490,10 +502,11 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
       # out *= math.sqrt(args.render_size)
       ref_fft = torch.fft.fftn(ref, dim=(1,2), norm="ortho")
       ref_fft = torch.fft.fftshift(ref_fft, dim=(1,2))
-      out = out / args.render_size
-      out_fft = out_fft / args.render_size
-      # ref_fft = ref_fft / args.render_size**2
-      loss = (loss_fn(out_fft.real, ref_fft.real) + loss_fn(out_fft.imag, ref_fft.imag)) + 0.1 * loss_fn(out, ref).sqrt()
+      # lossWeighting = linear_dist_center_weights(ref_fft.shape[1], ref_fft.shape[2], 0.5)
+      # out_fft = out_fft * lossWeighting[None, :, :, None]
+      # ref_fft = ref_fft * lossWeighting[None, :, :, None]
+      loss = (loss_fn(out_fft.real, ref_fft.real) + \
+        loss_fn(out_fft.imag, ref_fft.imag)) + 1. * loss_fn(out, ref).sqrt()
       # converges slowly - learns really garbage freq domain tbh
       # loss = loss_fn(out, ref)
     else:
@@ -502,7 +515,7 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
     assert(loss.isfinite()), f"Got {loss.item()} loss"
     l2_loss = loss.item()
     display = {
-      "l2": f"{l2_loss:.04f}",
+      "l2": f"{l2_loss:.04e}",
       "refresh": False,
     }
     if sched is not None: display["lr"] = f"{sched.get_last_lr()[0]:.1e}"
@@ -626,9 +639,9 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
 
     if i % args.save_freq == 0 and i != 0:
       save(model, args)
-      save_losses(args, losses)
+      save_losses(args, losses, "log")
   save(model, args)
-  save_losses(args, losses)
+  save_losses(args, losses, "log")
 
 def test(model, cam, labels, args, training: bool = True, light=None):
   times = None
@@ -660,11 +673,11 @@ def test(model, cam, labels, args, training: bool = True, light=None):
           with_noise=False, times=ts, args=args,
         )
         out, out_fft = out
-        out = out.squeeze(0) / args.render_size
+        out = out.squeeze(0)
         out_fft = out_fft.squeeze(0)
         ref_fft = torch.fft.fftn(exp, dim=(0,1), norm="ortho")
         ref_fft = torch.fft.fftshift(ref_fft, dim=(0,1))
-        out_fft = out_fft / args.render_size
+        out_fft = out_fft
         # ref_fft = ref_fft / args.render_size**2
         got = out
       else:

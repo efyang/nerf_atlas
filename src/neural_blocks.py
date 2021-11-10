@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import torchvision
 import torchvision.models as models
 import torchvision.transforms.functional as TVF
+import math
 
 from itertools import chain
 from typing import Optional, Union
@@ -95,7 +96,7 @@ class SkipConnMLP(nn.Module):
     in_size=3, out=3,
 
     skip=3,
-    activation = nn.LeakyReLU(inplace=True),
+    activations = [nn.LeakyReLU(inplace=True)],
     latent_size=0,
 
     enc: Optional[Union[FourierEncoder, PositionalEncoder, NNEncoder]] = None,
@@ -106,6 +107,7 @@ class SkipConnMLP(nn.Module):
     zero_init = False,
     xavier_init = False,
     kaiming_init = False,
+    siren_init = False,
   ):
     super(SkipConnMLP, self).__init__()
     self.in_size = in_size
@@ -117,18 +119,22 @@ class SkipConnMLP(nn.Module):
     self.dim_p = in_size + map_size + latent_size
     self.skip = skip
     self.latent_size = latent_size
+    hidden_size
     skip_size = hidden_size + self.dim_p
 
     # with skip
     hidden_layers = [
       nn.Linear(
-        skip_size if (i % skip) == 0 and i != num_layers-1 else hidden_size, hidden_size,
+        # skip_size*len(activations) if (i % skip) == 0 and i != num_layers-1 else hidden_size*len(activations), hidden_size,
+        # skip_size if (i % skip) == 0 and i != num_layers-1 else hidden_size, hidden_size,
+        # hidden_size*len(activations), hidden_size,
+        hidden_size, hidden_size,
       ) for i in range(num_layers)
     ]
 
     self.init =  nn.Linear(self.dim_p, hidden_size)
     self.layers = nn.ModuleList(hidden_layers)
-    self.out = nn.Linear(hidden_size, out)
+    self.out = nn.Linear(hidden_size*len(activations), out)
     weights = [
       self.init.weight, self.out.weight,
       *[l.weight for l in self.layers],
@@ -146,8 +152,14 @@ class SkipConnMLP(nn.Module):
     if kaiming_init:
       for t in weights: nn.init.kaiming_normal_(t, mode='fan_out')
       for t in biases: nn.init.zeros_(t)
+    if siren_init:
+      for t in weights:
+        fan_in, fan_out = nn.init._calculate_fan_in_and_fan_out(t)
+        a = math.sqrt(6 / fan_in)
+        nn.init._no_grad_uniform_(t, -a, a)
+      for t in biases: nn.init.zeros_(t)
 
-    self.activation = activation
+    self.activations = activations
     self.last_layer_act = last_layer_act
 
   def forward(self, p, latent: Optional[torch.Tensor]=None):
@@ -159,18 +171,22 @@ class SkipConnMLP(nn.Module):
 
     x = self.init(init)
     for i, layer in enumerate(self.layers):
-      if i != len(self.layers)-1 and (i % self.skip) == 0:
-        x = torch.cat([x, init], dim=-1)
-      x = layer(self.activation(x))
+      x = self.activations[i](x)
+      # x = self.apply_act(x)
+      # if i != len(self.layers)-1 and (i % self.skip) == 0:
+        # x = torch.cat([x, self.apply_act(init)], dim=-1)
+      x = layer(x)
     if self.last_layer_act: setattr(self, "last_layer_out", x.reshape(batches + (-1,)))
     out_size = self.out.out_features
-    return self.out(self.activation(x)).reshape(batches + (out_size,))
+    return self.out(self.apply_act(x)).reshape(batches + (out_size,))
   # smoothness of this sample along a given dimension for the last axis of a tensor
   def l2_smoothness(self, sample, values=None, noise=1e-1, dim=-1):
     if values is None: values = self(sample)
     adjusted = sample + noise * torch.rand_like(sample)
     adjusted = self(adjusted)
     return (values-adjusted).square().mean()
+  def apply_act(self, x):
+    return torch.cat([act(x) for act in self.activations], dim=-1)
 
 class RecurrentUnit(nn.Module):
   def __init__(

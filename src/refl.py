@@ -185,7 +185,6 @@ class FVRView(Reflectance):
   def __init__(
     self,
     space=None,
-
     view="elaz",
     **kwargs,
   ):
@@ -194,13 +193,13 @@ class FVRView(Reflectance):
     in_size = view_dims
     self.mlp = SkipConnMLP(
       in_size=in_size, out=self.out_features, latent_size=self.latent_size,
-      enc=FourierEncoder(input_dims=in_size),
-      num_layers=5, hidden_size=128, xavier_init=True,
+      # enc=FourierEncoder(input_dims=in_size),
+      num_layers=4, hidden_size=128, siren_init=True,
+      activations=[torch.sin]*3+[F.leaky_relu]
     )
   def forward(self, x, view, normal=None, light=None, latent=None):
     v = self.view_enc(view)
-    act = self.act(self.mlp(v))
-    return act * x
+    return self.mlp(v, latent)
 
 # view reflectance takes a view direction and a latent vector, and nothing else.
 class View(Reflectance):

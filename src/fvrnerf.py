@@ -12,6 +12,9 @@ from .neural_blocks import (
   SkipConnMLP, UpdateOperator, FourierEncoder, PositionalEncoder, NNEncoder
 )
 
+def csinact(x):
+  return torch.complex(torch.sin(x.real), torch.sin(x.imag))
+
 class FVRNeRF(CommonNeRF):
   def __init__(
     self,
@@ -29,13 +32,13 @@ class FVRNeRF(CommonNeRF):
     self.latent_size = 0
     self.mlp = SkipConnMLP(
       # in_size=3, out=1 + intermediate_size,
-      # in_size=3, out=intermediate_size,
-      in_size=3, out=out_features,
+      in_size=3, out=intermediate_size,
+      # in_size=3, out=out_features,
       latent_size = self.latent_size,
-      num_layers=8, hidden_size=256,
+      num_layers=6, hidden_size=256,
       # enc=FourierEncoder(input_dims=3, device=device),
-      xavier_init=True,
-      activation=torch.sin,
+      siren_init=True,
+      activations=[torch.sin]*5+[F.leaky_relu],
     )
 
     # self.mlp2 = SkipConnMLP(
@@ -53,10 +56,10 @@ class FVRNeRF(CommonNeRF):
     #   enc=FourierEncoder(input_dims=3, device=device),
     #   xavier_init=True,
     # )
-    self.refl = refl.SphericalHarmonic(
+    self.refl = refl.FVRView(
       out_features=out_features,
-      # latent_size=self.latent_size+intermediate_size,
-      latent_size=0
+      latent_size=self.latent_size+intermediate_size,
+      # latent_size=0
     )
 
     if isinstance(self.refl, refl.LightAndRefl): self.refl.refl.act = self.feat_act
@@ -67,6 +70,10 @@ class FVRNeRF(CommonNeRF):
 
   def forward(self, samples):
     pts, r_d = samples.split([3,3], dim=-1)
+    out = torch.zeros_like(pts, dtype=torch.complex64)
+    pmin = pts.size()[1]//2 + 1
+    pts = pts[:, :pmin, :, :]
+    r_d = r_d[:, :pmin, :, :]
     # latent = self.curr_latent(pts.shape)
     latent = None
     view = r_d
@@ -74,16 +81,23 @@ class FVRNeRF(CommonNeRF):
     # signed_pts = torch.cat([pts, hemisphere], dim=-1)
     # first_out = self.mlp(pts)
     fout = self.mlp(pts)
+    # fout = fout * pts.size()[1]
     # foutfft = torch.fft.fft(fout, dim=-1)
     # fin2 = torch.cat([foutfft.real, foutfft.imag], dim=-1)
     # fourier = self.mlp2(fin2)
     fourier = self.refl(
-      x=fout, view=view,
+      x = pts, latent=fout, view=view,
     )
-    re, im = fourier.split([3,3], dim=-1)
-    coeff = torch.complex(re, im) * pts.size()[1]
 
-    fft = torch.fft.ifftshift(coeff, dim=(1,2))
-    img = torch.fft.ifftn(fft, dim=(1,2), s=(pts.size()[1], pts.size()[2]), norm="ortho")
+    re, im = fourier.split([3,3], dim=-1)
+    coeff = torch.complex(re, im) * out.size()[1]
+    # real inputs always have hermitian fft
+    coefft = torch.flip(torch.conj(coeff), (1,2))
+    # coeff[:, :pts.size()[1]//2 + 2, :, :] = coefft[:, :pts.size()[1]//2 + 2, :, :]
+    out[:, :pmin, :, :] = coeff
+    out[:, pmin - 1:, :, :] = coefft
+
+    fft = torch.fft.ifftshift(out, dim=(1,2))
+    img = torch.fft.ifftn(fft, dim=(1,2), s=(out.size()[1], out.size()[2]), norm="ortho")
     # TODO: maybe need to change norm so not dependent on size
-    return (torch.abs(img), coeff) # + self.sky_color(view, self.weights)
+    return (img.real, out) # + self.sky_color(view, self.weights)

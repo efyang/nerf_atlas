@@ -246,6 +246,16 @@ def dir_to_elev_azim(direc):
   azim = torch.atan2(y,x)
   return torch.cat([elev, azim], dim=-1)
 
+def vec_to_spherical_coords(direc):
+  lim = 1 - 1e-6
+  x, y, z = F.normalize(direc, dim=-1).clamp(min=-lim, max=lim).split([1,1,1], dim=-1)
+  r = torch.linalg.norm(direc, dim=-1)[..., None]
+  # TODO this should be asin to match above... but they're never passed directly to each
+  # other.
+  elev = z.acos()
+  azim = torch.atan2(y,x)
+  return torch.cat([r, elev, azim], dim=-1)
+
 # [-1, 1]x2 -> [-1, 1]x3 (direction) sum (component of dir)^2 = 1
 #@torch.jit.script
 def uv_to_dir(uv): return elev_azim_to_dir(uv_to_elev_azim(uv))
@@ -436,3 +446,12 @@ def load_sigmoid(kind="thin"):
   sigmoid = sigmoid_kinds.get(kind, None)
   if sigmoid is None: raise NotImplementedError(f"Unknown sigmoid kind({kind})")
   return sigmoid
+
+def linear_dist_center_weights(w, h, minWeight, device="cuda"):
+  x, y = torch.meshgrid(torch.arange(0., w, device=device), torch.arange(0., h, device=device))
+  x = x - torch.mean(x)
+  y = y - torch.mean(y)
+  c = torch.stack([x, y], dim=-1)
+  c = torch.linalg.norm(c, dim=-1)**2
+  c = ((c - c.min()) / (c.max() - c.min())) * (1 - minWeight) + minWeight
+  return c
