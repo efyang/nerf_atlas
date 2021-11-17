@@ -352,7 +352,7 @@ def render(
   size,
 
   args,
-  times=None, with_noise=0.1,
+  times=None, with_noise=0.5,
 ):
   ii, jj = torch.meshgrid(
     torch.arange(size, device=device, dtype=torch.float),
@@ -502,11 +502,12 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
       # out *= math.sqrt(args.render_size)
       ref_fft = torch.fft.fftn(ref, dim=(1,2), norm="ortho")
       ref_fft = torch.fft.fftshift(ref_fft, dim=(1,2))
-      # lossWeighting = linear_dist_center_weights(ref_fft.shape[1], ref_fft.shape[2], 0.5)
+      # lossWeighting = linear_dist_center_weights(ref_fft.shape[1], ref_fft.shape[2], 0.01)
       # out_fft = out_fft * lossWeighting[None, :, :, None]
       # ref_fft = ref_fft * lossWeighting[None, :, :, None]
-      loss = (loss_fn(out_fft.real, ref_fft.real) + \
-        loss_fn(out_fft.imag, ref_fft.imag)) + 1. * loss_fn(out, ref).sqrt()
+      fftloss = (loss_fn(out_fft.real, ref_fft.real) + loss_fn(out_fft.imag, ref_fft.imag))
+      lossratio = min((2 * i / args.epochs), 1.)
+      loss = (1-lossratio) * fftloss + lossratio * loss_fn(out, ref)
       # converges slowly - learns really garbage freq domain tbh
       # loss = loss_fn(out, ref)
     else:
@@ -958,6 +959,7 @@ def main():
   # for some reason AdamW doesn't seem to work here
   # eps = 1e-7 was in the original paper.
   opt = optim.AdamW(parameters, lr=args.learning_rate, weight_decay=args.decay, eps=1e-7)
+  # opt = optim.Adam(parameters, lr=args.learning_rate, eps=1e-7)
 
   # TODO should T_max = -1 or args.epochs
   sched = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs, eta_min=5e-5)

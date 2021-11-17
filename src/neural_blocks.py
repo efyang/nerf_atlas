@@ -126,15 +126,16 @@ class SkipConnMLP(nn.Module):
     hidden_layers = [
       nn.Linear(
         # skip_size*len(activations) if (i % skip) == 0 and i != num_layers-1 else hidden_size*len(activations), hidden_size,
-        # skip_size if (i % skip) == 0 and i != num_layers-1 else hidden_size, hidden_size,
+        skip_size if (i % skip) == 0 and i != num_layers-1 else hidden_size, hidden_size,
         # hidden_size*len(activations), hidden_size,
-        hidden_size, hidden_size,
+        # hidden_size*2 if (i % skip) == 0 and i != num_layers-1 else hidden_size, hidden_size,
+        # hidden_size, hidden_size,
       ) for i in range(num_layers)
     ]
 
     self.init =  nn.Linear(self.dim_p, hidden_size)
     self.layers = nn.ModuleList(hidden_layers)
-    self.out = nn.Linear(hidden_size*len(activations), out)
+    self.out = nn.Linear(hidden_size, out)
     weights = [
       self.init.weight, self.out.weight,
       *[l.weight for l in self.layers],
@@ -172,13 +173,18 @@ class SkipConnMLP(nn.Module):
     x = self.init(init)
     for i, layer in enumerate(self.layers):
       x = self.activations[i](x)
+      # if (i % self.skip) != 0:
+      #   x = self.activations[i](x)
       # x = self.apply_act(x)
+      if i != len(self.layers)-1 and (i % self.skip) == 0:
+        x = torch.cat([x, init], dim=-1)
       # if i != len(self.layers)-1 and (i % self.skip) == 0:
-        # x = torch.cat([x, self.apply_act(init)], dim=-1)
+      #   x = torch.fft.fftn(x, dim=-1)
+      #   x = torch.cat([x.real, x.imag], dim=-1)
       x = layer(x)
     if self.last_layer_act: setattr(self, "last_layer_out", x.reshape(batches + (-1,)))
     out_size = self.out.out_features
-    return self.out(self.apply_act(x)).reshape(batches + (out_size,))
+    return self.out(x).reshape(batches + (out_size,))
   # smoothness of this sample along a given dimension for the last axis of a tensor
   def l2_smoothness(self, sample, values=None, noise=1e-1, dim=-1):
     if values is None: values = self(sample)

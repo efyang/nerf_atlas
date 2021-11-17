@@ -7,6 +7,7 @@ import random
 from torch.nn.modules import activation
 from src.nerf import CommonNeRF
 import src.refl as refl
+import math
 
 from .neural_blocks import (
   SkipConnMLP, UpdateOperator, FourierEncoder, PositionalEncoder, NNEncoder
@@ -14,6 +15,9 @@ from .neural_blocks import (
 
 def csinact(x):
   return torch.complex(torch.sin(x.real), torch.sin(x.imag))
+
+def rsin(x):
+  return F.relu(torch.sin(x))
 
 class FVRNeRF(CommonNeRF):
   def __init__(
@@ -35,10 +39,11 @@ class FVRNeRF(CommonNeRF):
       in_size=3, out=intermediate_size,
       # in_size=3, out=out_features,
       latent_size = self.latent_size,
-      num_layers=6, hidden_size=256,
+      num_layers=9, hidden_size=64,
       # enc=FourierEncoder(input_dims=3, device=device),
+      skip=5,
       siren_init=True,
-      activations=[torch.sin]*5+[F.leaky_relu],
+      activations=[rsin]*9,
     )
 
     # self.mlp2 = SkipConnMLP(
@@ -81,6 +86,7 @@ class FVRNeRF(CommonNeRF):
     # signed_pts = torch.cat([pts, hemisphere], dim=-1)
     # first_out = self.mlp(pts)
     fout = self.mlp(pts)
+    # fourier = self.mlp(pts)
     # fout = fout * pts.size()[1]
     # foutfft = torch.fft.fft(fout, dim=-1)
     # fin2 = torch.cat([foutfft.real, foutfft.imag], dim=-1)
@@ -99,5 +105,7 @@ class FVRNeRF(CommonNeRF):
 
     fft = torch.fft.ifftshift(out, dim=(1,2))
     img = torch.fft.ifftn(fft, dim=(1,2), s=(out.size()[1], out.size()[2]), norm="ortho")
+    # TODO: predict coefficients of some set of basis functions (fourier basis in this case)
+    # to reduce the output solution space
     # TODO: maybe need to change norm so not dependent on size
     return (img.real, out) # + self.sky_color(view, self.weights)

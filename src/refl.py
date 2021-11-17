@@ -180,6 +180,8 @@ class Basic(Reflectance):
     v = torch.cat([v for v in [x, view, normal, light] if v is not None], dim=-1)
     return self.act(self.mlp(v, latent))
 
+def rsin(x):
+  return F.relu(torch.sin(x))
 # view reflectance takes a view direction and a latent vector, and nothing else.
 class FVRView(Reflectance):
   def __init__(
@@ -194,8 +196,8 @@ class FVRView(Reflectance):
     self.mlp = SkipConnMLP(
       in_size=in_size, out=self.out_features, latent_size=self.latent_size,
       # enc=FourierEncoder(input_dims=in_size),
-      num_layers=4, hidden_size=128, siren_init=True,
-      activations=[torch.sin]*3+[F.leaky_relu]
+      num_layers=5, hidden_size=64, siren_init=True,
+      activations=[rsin]*4+[F.relu]
     )
   def forward(self, x, view, normal=None, light=None, latent=None):
     v = self.view_enc(view)
