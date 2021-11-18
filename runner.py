@@ -505,11 +505,13 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
       # lossWeighting = linear_dist_center_weights(ref_fft.shape[1], ref_fft.shape[2], 0.01)
       # out_fft = out_fft * lossWeighting[None, :, :, None]
       # ref_fft = ref_fft * lossWeighting[None, :, :, None]
-      fftloss = (loss_fn(out_fft.real, ref_fft.real) + loss_fn(out_fft.imag, ref_fft.imag))
-      lossratio = min((2 * i / args.epochs), 1.)
-      loss = (1-lossratio) * fftloss + lossratio * loss_fn(out, ref)
+      # fftloss = 2*(loss_fn(out_fft.real, ref_fft.real) + loss_fn(out_fft.imag, ref_fft.imag))
+      # lossratio = min((2*i / args.epochs), 1.)
+      # loss = (1-lossratio) * fftloss + lossratio * loss_fn(out, ref)
+      # loss = fftloss + loss_fn(out, ref)
+      # loss = fftloss
       # converges slowly - learns really garbage freq domain tbh
-      # loss = loss_fn(out, ref)
+      loss = loss_fn(out, ref)
     else:
       loss = loss_fn(out, ref)
 

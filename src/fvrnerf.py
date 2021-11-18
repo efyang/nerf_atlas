@@ -36,14 +36,14 @@ class FVRNeRF(CommonNeRF):
     self.latent_size = 0
     self.mlp = SkipConnMLP(
       # in_size=3, out=1 + intermediate_size,
-      in_size=3, out=intermediate_size,
-      # in_size=3, out=out_features,
+      # in_size=3, out=intermediate_size,
+      in_size=3, out=out_features,
       latent_size = self.latent_size,
-      num_layers=9, hidden_size=64,
+      num_layers=3, hidden_size=64,
       # enc=FourierEncoder(input_dims=3, device=device),
       skip=5,
       siren_init=True,
-      activations=[rsin]*9,
+      activations=[torch.sin]*3,
     )
 
     # self.mlp2 = SkipConnMLP(
@@ -61,11 +61,12 @@ class FVRNeRF(CommonNeRF):
     #   enc=FourierEncoder(input_dims=3, device=device),
     #   xavier_init=True,
     # )
-    self.refl = refl.FVRView(
+    self.refl = refl.MultFVRView(
       out_features=out_features,
-      latent_size=self.latent_size+intermediate_size,
+      latent_size=3,
       # latent_size=0
     )
+
 
     if isinstance(self.refl, refl.LightAndRefl): self.refl.refl.act = self.feat_act
     else: self.refl.act = self.feat_act
@@ -86,17 +87,20 @@ class FVRNeRF(CommonNeRF):
     # signed_pts = torch.cat([pts, hemisphere], dim=-1)
     # first_out = self.mlp(pts)
     fout = self.mlp(pts)
+    re, im = fout.split([3,3], dim=-1)
+    coeff = torch.complex(re, im) * out.size()[1]
     # fourier = self.mlp(pts)
     # fout = fout * pts.size()[1]
     # foutfft = torch.fft.fft(fout, dim=-1)
     # fin2 = torch.cat([foutfft.real, foutfft.imag], dim=-1)
     # fourier = self.mlp2(fin2)
     fourier = self.refl(
-      x = pts, latent=fout, view=view,
+      x = coeff, latent=pts, view=view,
     )
+    coeff = fourier
 
-    re, im = fourier.split([3,3], dim=-1)
-    coeff = torch.complex(re, im) * out.size()[1]
+    # re, im = fourier.split([3,3], dim=-1)
+    # coeff = torch.complex(re, im) * out.size()[1]
     # real inputs always have hermitian fft
     coefft = torch.flip(torch.conj(coeff), (1,2))
     # coeff[:, :pts.size()[1]//2 + 2, :, :] = coefft[:, :pts.size()[1]//2 + 2, :, :]
