@@ -9,6 +9,8 @@ from src.nerf import CommonNeRF
 import src.refl as refl
 import math
 
+from src.utils import fat_sigmoid
+
 from .neural_blocks import (
   SkipConnMLP, UpdateOperator, FourierEncoder, PositionalEncoder, NNEncoder
 )
@@ -37,13 +39,13 @@ class FVRNeRF(CommonNeRF):
     self.mlp = SkipConnMLP(
       # in_size=3, out=1 + intermediate_size,
       # in_size=3, out=intermediate_size,
-      in_size=3, out=out_features,
+      in_size=3, out=out_features+256,
       latent_size = self.latent_size,
-      num_layers=3, hidden_size=64,
+      num_layers=5, hidden_size=256,
       # enc=FourierEncoder(input_dims=3, device=device),
-      skip=5,
+      skip=3,
       siren_init=True,
-      activations=[torch.sin]*3,
+      activations=[torch.sin]*5,
     )
 
     # self.mlp2 = SkipConnMLP(
@@ -63,7 +65,7 @@ class FVRNeRF(CommonNeRF):
     # )
     self.refl = refl.MultFVRView(
       out_features=out_features,
-      latent_size=3,
+      latent_size=3+256,
       # latent_size=0
     )
 
@@ -86,7 +88,7 @@ class FVRNeRF(CommonNeRF):
     # hemisphere = torch.sign(view[:, :, :, [-1]])
     # signed_pts = torch.cat([pts, hemisphere], dim=-1)
     # first_out = self.mlp(pts)
-    fout = self.mlp(pts)
+    fout, first_latent = self.mlp(pts).split([6, 256], dim=-1)
     re, im = fout.split([3,3], dim=-1)
     coeff = torch.complex(re, im) * out.size()[1]
     # fourier = self.mlp(pts)
@@ -95,7 +97,7 @@ class FVRNeRF(CommonNeRF):
     # fin2 = torch.cat([foutfft.real, foutfft.imag], dim=-1)
     # fourier = self.mlp2(fin2)
     fourier = self.refl(
-      x = coeff, latent=pts, view=view,
+      x = coeff, latent=torch.cat([pts, first_latent], dim=-1), view=view,
     )
     coeff = fourier
 
@@ -109,7 +111,10 @@ class FVRNeRF(CommonNeRF):
 
     fft = torch.fft.ifftshift(out, dim=(1,2))
     img = torch.fft.ifftn(fft, dim=(1,2), s=(out.size()[1], out.size()[2]), norm="ortho")
+    img = img.real
+    img = fat_sigmoid(img)
+    # img = (torch.sin(img)+1)/2
     # TODO: predict coefficients of some set of basis functions (fourier basis in this case)
     # to reduce the output solution space
     # TODO: maybe need to change norm so not dependent on size
-    return (img.real, out) # + self.sky_color(view, self.weights)
+    return (img, out) # + self.sky_color(view, self.weights)

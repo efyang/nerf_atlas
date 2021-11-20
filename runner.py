@@ -352,7 +352,7 @@ def render(
   size,
 
   args,
-  times=None, with_noise=0.5,
+  times=None, with_noise=2.0,
 ):
   ii, jj = torch.meshgrid(
     torch.arange(size, device=device, dtype=torch.float),
@@ -634,10 +634,10 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
           maxre = ref_fft[0,...].real.max()
           minim = ref_fft[0,...].imag.min()
           maxim = ref_fft[0,...].imag.max()
-          items.append((ref_fft[0,...].real - minre)/(maxre-minre))
-          items.append((out_fft[0,...].real - minre)/(maxre-minre))
-          items.append((ref_fft[0,...].imag - minim)/(maxim-minim))
-          items.append((out_fft[0,...].imag - minim)/(maxim-minim))
+          items.append(((ref_fft[0,...].real - minre)/(maxre-minre)).clamp(0,1))
+          items.append(((out_fft[0,...].real - minre)/(maxre-minre)).clamp(0,1))
+          items.append(((ref_fft[0,...].imag - minim)/(maxim-minim)).clamp(0,1))
+          items.append(((out_fft[0,...].imag - minim)/(maxim-minim)).clamp(0,1))
         save_plot(os.path.join(args.outdir, f"valid_{i:05}.png"), *items)
 
     if i % args.save_freq == 0 and i != 0:
@@ -741,10 +741,10 @@ def test(model, cam, labels, args, training: bool = True, light=None):
         maxre = ref_fft[...].real.max()
         minim = ref_fft[...].imag.min()
         maxim = ref_fft[...].imag.max()
-        items.append((ref_fft[...].real - minre)/(maxre-minre))
-        items.append((out_fft[...].real - minre)/(maxre-minre))
-        items.append((ref_fft[...].imag - minim)/(maxim-minim))
-        items.append((out_fft[...].imag - minim)/(maxim-minim))
+        items.append(((ref_fft[...].real - minre)/(maxre-minre)).clamp(0,1))
+        items.append(((out_fft[...].real - minre)/(maxre-minre)).clamp(0,1))
+        items.append(((ref_fft[...].imag - minim)/(maxim-minim)).clamp(0,1))
+        items.append(((out_fft[...].imag - minim)/(maxim-minim)).clamp(0,1))
       save_plot(os.path.join(args.outdir, name), *items)
       #save_image(os.path.join(args.outdir, f"got_{i:03}.png"), got)
       ls.append(psnr)

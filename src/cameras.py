@@ -110,7 +110,7 @@ class FVRNeRFCamera(Camera):
       # slice_positions += (torch.rand_like(slice_positions) - 0.5) * with_noise * 0.1
       slice_positions += torch.randn_like(slice_positions) * with_noise
     # return the slice through the origin parallel to image plane
-    slice_positions = vec_to_spherical_coords(slice_positions)
+    # slice_positions = vec_to_spherical_coords(slice_positions)
     return torch.cat([slice_positions, r_d], dim=-1)
 
 

@@ -208,7 +208,7 @@ class MultFVRView(Reflectance):
   def __init__(
     self,
     space=None,
-    view="elaz",
+    view="raw",
     **kwargs,
   ):
     super().__init__(**kwargs)
@@ -217,8 +217,8 @@ class MultFVRView(Reflectance):
     self.mlp = SkipConnMLP(
       in_size=in_size, out=self.out_features, latent_size=self.latent_size,
       # enc=FourierEncoder(input_dims=in_size),
-      num_layers=2, hidden_size=64, siren_init=True,
-      skip=6,
+      num_layers=2, hidden_size=256, siren_init=True,
+      skip=2,
       activations=[torch.sin]*2
     )
   def forward(self, x, view, normal=None, light=None, latent=None):
