@@ -85,8 +85,8 @@ class FVRNeRFCamera(Camera):
     #   v = v + ((torch.randn_like(v))*with_noise).clamp(-with_noise, with_noise)
 
     s = torch.stack([
-        (u - (size-1) * 0.5) * self.ortho_scale,
-        -(v - (size-1) * 0.5) * self.ortho_scale,
+        (u - (size-1) * 0.5), # * self.ortho_scale,
+        -(v - (size-1) * 0.5), #* self.ortho_scale,
         torch.zeros_like(u),
     ], dim=-1)
 
@@ -107,8 +107,8 @@ class FVRNeRFCamera(Camera):
     slice_positions = slice_positions.permute(2,0,1,3) # [H, W, B, 3] -> [B, H, W, 3]
 
     if with_noise:
-      # slice_positions += (torch.rand_like(slice_positions) - 0.5) * with_noise * 0.1
-      slice_positions += torch.randn_like(slice_positions) * with_noise
+      slice_positions += (torch.rand_like(slice_positions) - 0.5) * with_noise
+      # slice_positions += torch.randn_like(slice_positions) * with_noise
     # return the slice through the origin parallel to image plane
     # slice_positions = vec_to_spherical_coords(slice_positions)
     return torch.cat([slice_positions, r_d], dim=-1)

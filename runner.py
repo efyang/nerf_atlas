@@ -78,7 +78,7 @@ def arguments():
   )
   a.add_argument(
     "--model", help="which model do we want to use", type=str,
-    choices=["tiny", "plain", "ae", "volsdf", "sdf", "fvr"], default="plain",
+    choices=["tiny", "plain", "ae", "volsdf", "sdf", "fvr", "learnedfvr"], default="plain",
   )
   a.add_argument(
     "--bg", help="What kind of background to use for NeRF", type=str,
@@ -352,7 +352,7 @@ def render(
   size,
 
   args,
-  times=None, with_noise=2.0,
+  times=None, with_noise=1.0,
 ):
   ii, jj = torch.meshgrid(
     torch.arange(size, device=device, dtype=torch.float),
@@ -360,7 +360,7 @@ def render(
   )
 
   positions = torch.stack([ii.transpose(-1, -2), jj.transpose(-1, -2)], dim=-1)
-  if not isinstance(model, fvrnerf.FVRNeRF):
+  if not isinstance(model, fvrnerf.FVRNeRF) and not isinstance(model, fvrnerf.LearnedFVR):
     t,l,h,w = crop
     positions = positions[t:t+h,l:l+w,:]
 
@@ -497,7 +497,7 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
       ref.mean() + 0.3 < sqr(random.random()): continue
 
     out, rays = render(model, cam[idxs], crop, size=args.render_size, times=ts, args=args, with_noise=0.1)
-    if isinstance(model, fvrnerf.FVRNeRF):
+    if isinstance(model, fvrnerf.FVRNeRF) or isinstance(model, fvrnerf.LearnedFVR):
       out, out_fft = out
       # out *= math.sqrt(args.render_size)
       ref_fft = torch.fft.fftn(ref, dim=(1,2), norm="ortho")
@@ -629,7 +629,7 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
             depth_normal = (50*utils.depth_to_normals(depth)+1)/2
             items.append(depth_normal.clamp(min=0, max=1))
 
-        if isinstance(model, fvrnerf.FVRNeRF):
+        if isinstance(model, fvrnerf.FVRNeRF) or isinstance(model, fvrnerf.LearnedFVR):
           minre = ref_fft[0,...].real.min()
           maxre = ref_fft[0,...].real.max()
           minim = ref_fft[0,...].imag.min()
@@ -670,7 +670,7 @@ def test(model, cam, labels, args, training: bool = True, light=None):
         model.refl.light.set_idx(torch.tensor([i], device=device))
 
       N = math.ceil(args.render_size/args.crop_size)
-      if isinstance(model, fvrnerf.FVRNeRF):
+      if isinstance(model, fvrnerf.FVRNeRF) or isinstance(model, fvrnerf.LearnedFVR):
         out, rays = render(
           model, cam[i:i+1, ...], None, size=args.render_size,
           with_noise=False, times=ts, args=args,
@@ -736,7 +736,7 @@ def test(model, cam, labels, args, training: bool = True, light=None):
       if args.draw_colormap:
         colormap = utils.color_map(cam[i:i+1])
         items.append(colormap) 
-      if isinstance(model, fvrnerf.FVRNeRF):
+      if isinstance(model, fvrnerf.FVRNeRF) or isinstance(model, fvrnerf.LearnedFVR):
         minre = ref_fft[...].real.min()
         maxre = ref_fft[...].real.max()
         minim = ref_fft[...].imag.min()
@@ -851,6 +851,8 @@ def load_model(args):
   elif args.model == "fvr":
     kwargs["out_features"] = 6
     constructor = fvrnerf.FVRNeRF
+  elif args.model == "learnedfvr":
+    constructor = fvrnerf.LearnedFVR
   elif args.model == "ae":
     constructor = nerf.NeRFAE
     kwargs["normalize_latent"] = args.normalize_latent
