@@ -64,7 +64,7 @@ class FVRNeRF(CommonNeRF):
     #   xavier_init=True,
     # )
     self.refl = refl.MultFVRView(
-      out_features=out_features,
+      out_features=1,
       latent_size=3+256,
       # latent_size=0
     )
