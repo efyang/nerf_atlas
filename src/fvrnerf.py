@@ -41,11 +41,11 @@ class FVRNeRF(CommonNeRF):
       # in_size=3, out=intermediate_size,
       in_size=3, out=out_features+256,
       latent_size = self.latent_size,
-      num_layers=5, hidden_size=256,
+      num_layers=6, hidden_size=256,
       # enc=FourierEncoder(input_dims=3, device=device),
       skip=3,
       siren_init=True,
-      activations=[torch.sin]*5,
+      activations=[torch.sin]*8,
     )
 
     # self.mlp2 = SkipConnMLP(
@@ -65,10 +65,15 @@ class FVRNeRF(CommonNeRF):
     # )
     self.refl = refl.MultFVRView(
       out_features=1,
-      latent_size=3+256,
+      latent_size=256,
       # latent_size=0
     )
 
+    self.conv = nn.Conv2d(12, 6, 5, padding=0, padding_mode="replicate")
+    self.upconv = nn.ConvTranspose2d(6, 6, 5, padding=0)
+    # self.conv2 = nn.Conv2d(16, 16, 3, padding=1, padding_mode="replicate")
+    # self.conv3 = nn.Conv2d(16, 16, 3, padding=1, padding_mode="replicate")
+    # self.conv4 = nn.Conv2d(16, 6, 3, padding=1, padding_mode="replicate")
 
     if isinstance(self.refl, refl.LightAndRefl): self.refl.refl.act = self.feat_act
     else: self.refl.act = self.feat_act
@@ -80,26 +85,22 @@ class FVRNeRF(CommonNeRF):
     pts, r_d = samples.split([3,3], dim=-1)
     out = torch.zeros_like(pts, dtype=torch.complex64)
     pmin = pts.size()[1]//2 + 1
+    ptsraw = pts
     pts = pts[:, :pmin, :, :]
+    view = r_d
     r_d = r_d[:, :pmin, :, :]
     # latent = self.curr_latent(pts.shape)
-    latent = None
-    view = r_d
     # hemisphere = torch.sign(view[:, :, :, [-1]])
     # signed_pts = torch.cat([pts, hemisphere], dim=-1)
     # first_out = self.mlp(pts)
     fout, first_latent = self.mlp(pts).split([6, 256], dim=-1)
     re, im = fout.split([3,3], dim=-1)
     coeff = torch.complex(re, im) * out.size()[1]
-    # fourier = self.mlp(pts)
-    # fout = fout * pts.size()[1]
-    # foutfft = torch.fft.fft(fout, dim=-1)
-    # fin2 = torch.cat([foutfft.real, foutfft.imag], dim=-1)
-    # fourier = self.mlp2(fin2)
-    fourier = self.refl(
-      x = coeff, latent=torch.cat([pts, first_latent], dim=-1), view=view,
-    )
-    coeff = fourier
+
+    # cue_weights = self.refl(
+    #   x = pts, latent=first_latent, view=r_d,
+    # )
+    # coeff = cue_weights[..., None] * coeff
 
     # re, im = fourier.split([3,3], dim=-1)
     # coeff = torch.complex(re, im) * out.size()[1]
@@ -109,10 +110,26 @@ class FVRNeRF(CommonNeRF):
     out[:, :pmin, :, :] = coeff
     out[:, pmin - 1:, :, :] = coefft
 
+    # todo: add in first latent
+    out = torch.cat([out.real, out.imag], dim=-1)
+    out = torch.cat([out, view, pts], dim=-1)
+    # out is [N, H, W, C]
+    # permute to [N, C, H, W] for conv
+    out = out.permute((0,3,1,2))
+    out = self.conv(out)
+    out = self.upconv(out)
+    # out = self.conv2(out)
+    # out = self.conv3(out)
+    # out = self.conv4(out)
+    # permute back to [N, H, W, C]
+    out = out.permute((0,2,3,1))
+    re, im = out.split([3,3], dim=-1)
+    out = torch.complex(re, im)
+
     fft = torch.fft.ifftshift(out, dim=(1,2))
     img = torch.fft.ifftn(fft, dim=(1,2), s=(out.size()[1], out.size()[2]), norm="ortho")
     img = img.real
-    img = fat_sigmoid(img)
+    # img = fat_sigmoid(img)
     # img = (torch.sin(img)+1)/2
     # TODO: predict coefficients of some set of basis functions (fourier basis in this case)
     # to reduce the output solution space
