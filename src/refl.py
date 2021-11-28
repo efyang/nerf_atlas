@@ -216,20 +216,23 @@ class MultFVRView(Reflectance):
     view_dims, self.view_enc = enc_norm_dir(view)
     in_size = view_dims
     self.mlp = SkipConnMLP(
-      in_size=in_size, out=6, latent_size=self.latent_size,
+      in_size=in_size, out=6, latent_size=self.latent_size+view_dims,
       # enc=FourierEncoder(input_dims=in_size),
-      num_layers=2, hidden_size=256, siren_init=True,
+      num_layers=3, hidden_size=256, siren_init=True,
       skip=3,
       activations=[torch.sin]*3
     )
   def forward(self, x, view, normal=None, light=None, latent=None):
     v = self.view_enc(view)
+    # ret = self.mlp(x, latent)
+    latent = torch.cat([latent, v], dim=-1)
     ret = self.mlp(x, latent)
     re, im = ret.split([3, 3], dim=-1)
     c = torch.complex(re, im)
-    w = torch.sum(v * c, dim=-1)
+    # w = torch.sum(v * c, dim=-1)
     # print(c.shape, v.shape, w.shape)
-    return w
+    # return w
+    return c
 
 # view reflectance takes a view direction and a latent vector, and nothing else.
 class View(Reflectance):

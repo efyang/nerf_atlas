@@ -354,6 +354,8 @@ def render(
   args,
   times=None, with_noise=1.0,
 ):
+  if isinstance(model, fvrnerf.FVRNeRF):
+    size += 2
   ii, jj = torch.meshgrid(
     torch.arange(size, device=device, dtype=torch.float),
     torch.arange(size, device=device, dtype=torch.float),
@@ -498,9 +500,13 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
 
     out, rays = render(model, cam[idxs], crop, size=args.render_size, times=ts, args=args, with_noise=0.1)
     if isinstance(model, fvrnerf.FVRNeRF) or isinstance(model, fvrnerf.LearnedFVR):
-      out, out_fft = out
+      out, out_fft, cimg = out
       # out *= math.sqrt(args.render_size)
+      # print(torch.fft.rfftn(ref, dim=(1,2), norm="ortho").shape)
+      # print(torch.fft.fftn(ref, dim=(1,2), norm="ortho").shape)
       ref_fft = torch.fft.fftn(ref, dim=(1,2), norm="ortho")
+      # ref_fft = torch.fft.rfftn(ref, dim=(1,2), norm="ortho")
+      # ref_fft = torch.fft.fftshift(ref_fft, dim=(1))
       ref_fft = torch.fft.fftshift(ref_fft, dim=(1,2))
       # lossWeighting = linear_dist_center_weights(ref_fft.shape[1], ref_fft.shape[2], 0.01)
       # out_fft = out_fft * lossWeighting[None, :, :, None]
@@ -511,7 +517,8 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
       # loss = fftloss + loss_fn(out, ref)
       # loss = fftloss
       # converges slowly - learns really garbage freq domain tbh
-      loss = loss_fn(out, ref)
+      zeros = torch.zeros_like(cimg)
+      loss = loss_fn(out, ref) + loss_fn(cimg, zeros)
     else:
       loss = loss_fn(out, ref)
 
@@ -675,12 +682,13 @@ def test(model, cam, labels, args, training: bool = True, light=None):
           model, cam[i:i+1, ...], None, size=args.render_size,
           with_noise=False, times=ts, args=args,
         )
-        out, out_fft = out
+        out, out_fft, cimg = out
         out = out.squeeze(0)
         out_fft = out_fft.squeeze(0)
+        # ref_fft = torch.fft.rfftn(exp, dim=(0,1), norm="ortho")
         ref_fft = torch.fft.fftn(exp, dim=(0,1), norm="ortho")
+        # ref_fft = torch.fft.fftshift(ref_fft, dim=(0))
         ref_fft = torch.fft.fftshift(ref_fft, dim=(0,1))
-        out_fft = out_fft
         # ref_fft = ref_fft / args.render_size**2
         got = out
       else:

@@ -306,7 +306,7 @@ test_original: clean
 fvr: clean
 	python3 -O runner.py -d data/lego_ortho/ --data-kind ortho \
 	--size 65 --epochs 5000 --save models/lego_ortho_sphc3sig.pt \
-	--batch-size 25	--model fvr -lr 1e-3 --save-freq=1000 --clip-gradients 1 --skip-loss 500  \
+	--batch-size 25	--model fvr -lr 1e-3 --save-freq=500 --clip-gradients 1e-1 --decay 1e-5  \
 	--loss-fns l2 --valid-freq 250 --refl-kind multfvrview --sigmoid-kind leaky_relu --no-sched #--load models/lego_ortho_sphc3sig.pt #--omit-bg
 
 test_fvr: clean

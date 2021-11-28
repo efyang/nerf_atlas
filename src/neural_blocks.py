@@ -156,7 +156,7 @@ class SkipConnMLP(nn.Module):
     if siren_init:
       for t in weights:
         fan_in, fan_out = nn.init._calculate_fan_in_and_fan_out(t)
-        a = math.sqrt(6 / fan_in)
+        a = math.sqrt(1 / fan_in)
         nn.init._no_grad_uniform_(t, -a, a)
       for t in biases: nn.init._no_grad_uniform_(t, -0.01, 0.01)
 
