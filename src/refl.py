@@ -218,7 +218,7 @@ class MultFVRView(Reflectance):
     self.mlp = SkipConnMLP(
       in_size=in_size, out=6, latent_size=self.latent_size+view_dims,
       # enc=FourierEncoder(input_dims=in_size),
-      num_layers=3, hidden_size=256, siren_init=True,
+      num_layers=2, hidden_size=256, siren_init=True,
       skip=3,
       activations=[torch.sin]*3
     )

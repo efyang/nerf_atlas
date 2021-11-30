@@ -354,8 +354,8 @@ def render(
   args,
   times=None, with_noise=1.0,
 ):
-  if isinstance(model, fvrnerf.FVRNeRF):
-    size += 2
+  # if isinstance(model, fvrnerf.FVRNeRF):
+  #   size += 2
   ii, jj = torch.meshgrid(
     torch.arange(size, device=device, dtype=torch.float),
     torch.arange(size, device=device, dtype=torch.float),
@@ -498,7 +498,7 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
     if args.omit_bg and (i % args.save_freq) != 0 and (i % args.valid_freq) != 0 and \
       ref.mean() + 0.3 < sqr(random.random()): continue
 
-    out, rays = render(model, cam[idxs], crop, size=args.render_size, times=ts, args=args, with_noise=0.1)
+    out, rays = render(model, cam[idxs], crop, size=args.render_size, times=ts, args=args, with_noise=0.2)
     if isinstance(model, fvrnerf.FVRNeRF) or isinstance(model, fvrnerf.LearnedFVR):
       out, out_fft, cimg = out
       # out *= math.sqrt(args.render_size)
@@ -518,7 +518,7 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
       # loss = fftloss
       # converges slowly - learns really garbage freq domain tbh
       zeros = torch.zeros_like(cimg)
-      loss = loss_fn(out, ref) + loss_fn(cimg, zeros)
+      loss = loss_fn(out, ref) #+ loss_fn(cimg, zeros)
     else:
       loss = loss_fn(out, ref)
 
@@ -970,7 +970,7 @@ def main():
 
   # for some reason AdamW doesn't seem to work here
   # eps = 1e-7 was in the original paper.
-  opt = optim.AdamW(parameters, lr=args.learning_rate, weight_decay=args.decay, eps=1e-7)
+  opt = optim.AdamW(parameters, lr=args.learning_rate, weight_decay=args.decay, eps=1e-7, amsgrad=True)
   # opt = optim.Adam(parameters, lr=args.learning_rate, eps=1e-7)
 
   # TODO should T_max = -1 or args.epochs

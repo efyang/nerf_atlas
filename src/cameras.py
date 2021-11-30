@@ -85,8 +85,8 @@ class FVRNeRFCamera(Camera):
     #   v = v + ((torch.randn_like(v))*with_noise).clamp(-with_noise, with_noise)
 
     s = torch.stack([
-        (u - (size-1) * 0.5) * self.ortho_scale,
-        -(v - (size-1) * 0.5) * self.ortho_scale,
+        (u - (size-1) * 0.5), # * self.ortho_scale,
+        -(v - (size-1) * 0.5), # * self.ortho_scale,
         torch.zeros_like(u),
     ], dim=-1)
 
@@ -100,16 +100,18 @@ class FVRNeRFCamera(Camera):
     r_d = torch.sum(d[..., None, :] * self.cam_to_world[..., :3, :3], dim=-1)
     slice_positions = torch.sum(s[..., None, :] * self.cam_to_world[..., :3, :3], dim=-1)
     # if with_noise:
-    #   a, b, c = (torch.randn(3, device=device)*with_noise).clamp(-with_noise, with_noise) * math.pi/180
-    #   s = torch.sum(s[..., None, :] * rotation_matrix(a,b,c), dim=-1)
-      # a, b, c = (torch.randn(3, device=device)*with_noise).clamp(-with_noise, with_noise) * math.pi/100
+      # a, b, c = (torch.randn(3, device=device)*with_noise).clamp(-with_noise, with_noise) * math.pi/180
+      # s = torch.sum(s[..., None, :] * rotation_matrix(a,b,c), dim=-1)
+      # a, b, c = (torch.randn(3, device=device)*with_noise).clamp(-with_noise, with_noise) * math.pi/180
       # r_d = torch.sum(r_d[..., None, :] * rotation_matrix(a,b,c), dim=-1)
     r_d = r_d.permute(2,0,1,3) # [H, W, B, 3] -> [B, H, W, 3]
     slice_positions = slice_positions.permute(2,0,1,3) # [H, W, B, 3] -> [B, H, W, 3]
+    uvs = s.permute(2,0,1,3) # [H, W, B, 3] -> [B, H, W, 3]
+    distances = uvs.norm(dim=-1)/(size/2) + 0.01
 
     if with_noise:
-      # slice_positions += (torch.rand_like(slice_positions) - 0.5) * with_noise
-      slice_positions += torch.randn_like(slice_positions) * with_noise
+      # slice_positions += (torch.rand_like(slice_positions) - 0.5) * 0.1 *with_noise
+      slice_positions += torch.randn_like(slice_positions) * with_noise * (distances[..., None])
       # r_d += torch.randn_like(slice_positions) * with_noise * 0.05
       # r_d = F.normalize(r_d, dim=-1)
     # return the slice through the origin parallel to image plane

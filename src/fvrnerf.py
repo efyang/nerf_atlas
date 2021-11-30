@@ -48,17 +48,17 @@ class FVRNeRF(CommonNeRF):
       activations=[torch.sin]*8,
     )
 
-    self.filter_gen_mlp = SkipConnMLP(
+    # self.filter_gen_mlp = SkipConnMLP(
       # in_size=3, out=1 + intermediate_size,
       # in_size=3, out=intermediate_size,
-      in_size=3, out=3*3,
-      latent_size = self.latent_size,
-      num_layers=6, hidden_size=64,
+      # in_size=3, out=3*3,
+      # latent_size = self.latent_size,
+      # num_layers=6, hidden_size=64,
       # enc=FourierEncoder(input_dims=3, device=device),
-      skip=3,
-      siren_init=True,
-      activations=[torch.sin]*8,
-    )
+      # skip=3,
+      # siren_init=True,
+      # activations=[torch.sin]*8,
+    # )
 
     # self.mlp2 = SkipConnMLP(
       # in_size=3, out=1 + intermediate_size,
@@ -76,16 +76,10 @@ class FVRNeRF(CommonNeRF):
     #   xavier_init=True,
     # )
     self.refl = refl.MultFVRView(
-      out_features=1,
+      out_features=6,
       latent_size=256,
       # latent_size=0
     )
-
-    # self.conv = nn.Conv2d(12, 6, 5, padding=0, padding_mode="replicate")
-    # self.upconv = nn.ConvTranspose2d(6, 6, 5, padding=0)
-    # self.conv2 = nn.Conv2d(16, 16, 3, padding=1, padding_mode="replicate")
-    # self.conv3 = nn.Conv2d(16, 16, 3, padding=1, padding_mode="replicate")
-    # self.conv4 = nn.Conv2d(16, 6, 3, padding=1, padding_mode="replicate")
 
     if isinstance(self.refl, refl.LightAndRefl): self.refl.refl.act = self.feat_act
     else: self.refl.act = self.feat_act
@@ -110,30 +104,30 @@ class FVRNeRF(CommonNeRF):
     re, im = fout.split([3,3], dim=-1)
     coeff = torch.complex(re, im) * out.size()[1]
 
-    # cue_weights = self.refl(
-    #   x = pts, latent=first_latent, view=r_d,
-    # )
-    # coeff = cue_weights * coeff
+    cue_weights = self.refl(
+      x = pts, latent=first_latent, view=r_d,
+    )
+    # cwa, cwb = cue_weights.split([1,1], dim=-1)
+    coeff = cue_weights * coeff # + cwb
 
     # re, im = fourier.split([3,3], dim=-1)
     # coeff = torch.complex(re, im) * out.size()[1]
     # real inputs always have hermitian fft
     coefft = torch.flip(torch.conj(coeff), (1,2))
-    # coeff[:, :pts.size()[1]//2 + 2, :, :] = coefft[:, :pts.size()[1]//2 + 2, :, :]
     out[:, :pmin, :, :] = coeff
     out[:, pmin - 1:, :, :] = coefft
 
-    nchan = 6
-    fsize = 3
-    view_filter = self.filter_gen_mlp(r_d[0, 0, 0, :]).reshape((fsize,fsize)).expand((nchan, 1, -1,-1))
+    # nchan = 6
+    # fsize = 3
+    # view_filter = self.filter_gen_mlp(r_d[0, 0, 0, :]).reshape((fsize,fsize)).expand((nchan, 1, -1,-1))
     # todo: add in first latent
-    out = torch.cat([out.real, out.imag], dim=-1)
+    # out = torch.cat([out.real, out.imag], dim=-1)
     # out = torch.cat([out, view, ptsraw], dim=-1)
     # out is [N, H, W, C]
     # permute to [N, C, H, W] for conv
-    out = out.permute((0,3,1,2))
+    # out = out.permute((0,3,1,2))
     # print(view_filter.shape, out.shape)
-    out = F.conv2d(out, view_filter, padding=0, groups=nchan)
+    # out = F.conv2d(out, view_filter, padding=0, groups=nchan)
     # print(out.shape)
     # out = self.conv(out)
     # out = self.upconv(out)
@@ -141,17 +135,26 @@ class FVRNeRF(CommonNeRF):
     # out = self.conv3(out)
     # out = self.conv4(out)
     # permute back to [N, H, W, C]
-    out = out.permute((0,2,3,1))
-    re, im = out.split([3,3], dim=-1)
-    out = torch.complex(re, im)
+    # out = out.permute((0,2,3,1))
+    # re, im = out.split([3,3], dim=-1)
+    # out = torch.complex(re, im)
 
     # fft = torch.fft.ifftshift(coeff, dim=(1))
+
+    ii, jj = torch.meshgrid(
+      torch.arange(out.shape[1], device="cuda", dtype=torch.float) - out.shape[1]/2 + 0.5,
+      torch.arange(out.shape[2], device="cuda", dtype=torch.float) - out.shape[2]/2 + 0.5,
+    )
+    positions = torch.stack([ii.transpose(-1, -2), jj.transpose(-1, -2)], dim=-1)
+    circle_mask = positions.norm(dim=-1) > 1 * out.shape[1]//2
+    out[:, circle_mask, :] = 0
+
     fft = torch.fft.ifftshift(out, dim=(1,2))
     img = torch.fft.ifftn(fft, dim=(1,2), s=(out.size()[1], out.size()[2]), norm="ortho")
     # img = torch.fft.irfftn(fft, dim=(1,2), s=(out.size()[1], out.size()[1]), norm="ortho")
     cimg = img.imag
     img = img.real
-    # img = fat_sigmoid(img)
+    img = fat_sigmoid(img)
     # img = (torch.sin(img)+1)/2
     # TODO: predict coefficients of some set of basis functions (fourier basis in this case)
     # to reduce the output solution space
@@ -183,7 +186,7 @@ class LearnedFVR(CommonNeRF):
       latent_size=0,
     )
 
-    self.resolution = 201
+    self.resolution = 101
     self.fourier_volume = nn.parameter.Parameter(torch.zeros(self.resolution, self.resolution, self.resolution, 6, device=device))
     if isinstance(self.refl, refl.LightAndRefl): self.refl.refl.act = self.feat_act
     else: self.refl.act = self.feat_act
@@ -229,7 +232,7 @@ class LearnedFVR(CommonNeRF):
 
   def forward(self, samples):
     size = 65
-    maxdiam = math.ceil(size * math.sqrt(2))
+    maxdiam = math.ceil(size * math.sqrt(2))+2
 
     pts, r_d = samples.split([3,3], dim=-1)
     pts = pts*(self.resolution/maxdiam) + self.resolution//2
@@ -238,5 +241,6 @@ class LearnedFVR(CommonNeRF):
     out = self.trilinear_interp_vec(pts)
     fft = torch.fft.ifftshift(out, dim=(1,2))
     img = torch.fft.ifftn(fft, dim=(1,2), s=(out.size()[1], out.size()[2]), norm="ortho")
+    cimg = img.imag
     img = img.real
-    return (img, out) # + self.sky_color(view, self.weights)
+    return (img, out, cimg) # + self.sky_color(view, self.weights)
