@@ -498,7 +498,7 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
     if args.omit_bg and (i % args.save_freq) != 0 and (i % args.valid_freq) != 0 and \
       ref.mean() + 0.3 < sqr(random.random()): continue
 
-    out, rays = render(model, cam[idxs], crop, size=args.render_size, times=ts, args=args, with_noise=0.2)
+    out, rays = render(model, cam[idxs], crop, size=args.render_size, times=ts, args=args, with_noise=0.4)
     if isinstance(model, fvrnerf.FVRNeRF) or isinstance(model, fvrnerf.LearnedFVR):
       out, out_fft, cimg = out
       # out *= math.sqrt(args.render_size)
@@ -517,7 +517,7 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
       # loss = fftloss + loss_fn(out, ref)
       # loss = fftloss
       # converges slowly - learns really garbage freq domain tbh
-      zeros = torch.zeros_like(cimg)
+      # zeros = torch.zeros_like(cimg)
       loss = loss_fn(out, ref) #+ loss_fn(cimg, zeros)
     else:
       loss = loss_fn(out, ref)

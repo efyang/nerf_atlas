@@ -90,6 +90,10 @@ class FVRNeRF(CommonNeRF):
   def forward(self, samples):
     pts, r_d = samples.split([3,3], dim=-1)
     out = torch.zeros_like(pts, dtype=torch.complex64)
+    # out = torch.zeros_like(pts[..., 0], dtype=torch.complex64)
+    # out = out[..., None]
+    # out = out.expand(-1,-1,-1,4)
+    # out = out.clone()
     pmin = pts.size()[1]//2 + 1
     ptsraw = pts
     # pts = pts[:, :, pmin-1:, :]
@@ -141,13 +145,14 @@ class FVRNeRF(CommonNeRF):
 
     # fft = torch.fft.ifftshift(coeff, dim=(1))
 
-    ii, jj = torch.meshgrid(
-      torch.arange(out.shape[1], device="cuda", dtype=torch.float) - out.shape[1]/2 + 0.5,
-      torch.arange(out.shape[2], device="cuda", dtype=torch.float) - out.shape[2]/2 + 0.5,
-    )
-    positions = torch.stack([ii.transpose(-1, -2), jj.transpose(-1, -2)], dim=-1)
-    circle_mask = positions.norm(dim=-1) > 1 * out.shape[1]//2
-    out[:, circle_mask, :] = 0
+    # circle_ratio = 1
+    # ii, jj = torch.meshgrid(
+    #   torch.arange(out.shape[1], device="cuda", dtype=torch.float) - out.shape[1]/2 + 0.5,
+    #   torch.arange(out.shape[2], device="cuda", dtype=torch.float) - out.shape[2]/2 + 0.5,
+    # )
+    # positions = torch.stack([ii.transpose(-1, -2), jj.transpose(-1, -2)], dim=-1)
+    # circle_mask = positions.norm(dim=-1) > circle_ratio * out.shape[1]//2
+    # out[:, circle_mask, :] = 0
 
     fft = torch.fft.ifftshift(out, dim=(1,2))
     img = torch.fft.ifftn(fft, dim=(1,2), s=(out.size()[1], out.size()[2]), norm="ortho")
@@ -239,6 +244,16 @@ class LearnedFVR(CommonNeRF):
     out = torch.zeros_like(pts, dtype=torch.complex64)
 
     out = self.trilinear_interp_vec(pts)
+
+    circle_ratio = 0.25
+    ii, jj = torch.meshgrid(
+      torch.arange(out.shape[1], device="cuda", dtype=torch.float) - out.shape[1]/2 + 0.5,
+      torch.arange(out.shape[2], device="cuda", dtype=torch.float) - out.shape[2]/2 + 0.5,
+    )
+    positions = torch.stack([ii.transpose(-1, -2), jj.transpose(-1, -2)], dim=-1)
+    circle_mask = positions.norm(dim=-1) > circle_ratio * out.shape[1]//2
+    out[:, circle_mask, :] = 0
+
     fft = torch.fft.ifftshift(out, dim=(1,2))
     img = torch.fft.ifftn(fft, dim=(1,2), s=(out.size()[1], out.size()[2]), norm="ortho")
     cimg = img.imag
