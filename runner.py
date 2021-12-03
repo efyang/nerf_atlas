@@ -500,7 +500,7 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
 
     out, rays = render(model, cam[idxs], crop, size=args.render_size, times=ts, args=args, with_noise=0.5)
     if isinstance(model, fvrnerf.FVRNeRF) or isinstance(model, fvrnerf.LearnedFVR):
-      out, out_fft, cimg = out
+      out, out_fft = out
       # out *= math.sqrt(args.render_size)
       # print(torch.fft.rfftn(ref, dim=(1,2), norm="ortho").shape)
       # print(torch.fft.fftn(ref, dim=(1,2), norm="ortho").shape)
@@ -638,14 +638,14 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
 
         titles = None
         if isinstance(model, fvrnerf.FVRNeRF) or isinstance(model, fvrnerf.LearnedFVR):
-          minre = ref_fft[0,...].real.min()
-          maxre = ref_fft[0,...].real.max()
-          minim = ref_fft[0,...].imag.min()
-          maxim = ref_fft[0,...].imag.max()
-          items.append(((ref_fft[0,...].real - minre)/(maxre-minre)).clamp(0,1))
-          items.append(((out_fft[0,...].real - minre)/(maxre-minre)).clamp(0,1))
-          items.append(((ref_fft[0,...].imag - minim)/(maxim-minim)).clamp(0,1))
-          items.append(((out_fft[0,...].imag - minim)/(maxim-minim)).clamp(0,1))
+          # minre = ref_fft[0,...].real.min()
+          # maxre = ref_fft[0,...].real.max()
+          # minim = ref_fft[0,...].imag.min()
+          # maxim = ref_fft[0,...].imag.max()
+          # items.append(((ref_fft[0,...].real - minre)/(maxre-minre)).clamp(0,1))
+          # items.append(((out_fft[0,...].real - minre)/(maxre-minre)).clamp(0,1))
+          # items.append(((ref_fft[0,...].imag - minim)/(maxim-minim)).clamp(0,1))
+          # items.append(((out_fft[0,...].imag - minim)/(maxim-minim)).clamp(0,1))
           titles = ["Ref Img", "Out Img", "Ref FFT Real", "Out FFT Real", "Ref FFT Imag", "Out FFT Imag"]
         save_plot(os.path.join(args.outdir, f"valid_{i:05}.png"), *items, titles=titles)
 
@@ -684,7 +684,7 @@ def test(model, cam, labels, args, training: bool = True, light=None):
           model, cam[i:i+1, ...], None, size=args.render_size,
           with_noise=False, times=ts, args=args,
         )
-        out, out_fft, cimg = out
+        out, out_fft = out
         out = out.squeeze(0)
         out_fft = out_fft.squeeze(0)
         # ref_fft = torch.fft.rfftn(exp, dim=(0,1), norm="ortho")
@@ -748,14 +748,14 @@ def test(model, cam, labels, args, training: bool = True, light=None):
         items.append(colormap) 
       titles = None
       if isinstance(model, fvrnerf.FVRNeRF) or isinstance(model, fvrnerf.LearnedFVR):
-        minre = ref_fft[...].real.min()
-        maxre = ref_fft[...].real.max()
-        minim = ref_fft[...].imag.min()
-        maxim = ref_fft[...].imag.max()
-        items.append(((ref_fft[...].real - minre)/(maxre-minre)).clamp(0,1))
-        items.append(((out_fft[...].real - minre)/(maxre-minre)).clamp(0,1))
-        items.append(((ref_fft[...].imag - minim)/(maxim-minim)).clamp(0,1))
-        items.append(((out_fft[...].imag - minim)/(maxim-minim)).clamp(0,1))
+        # minre = ref_fft[...].real.min()
+        # maxre = ref_fft[...].real.max()
+        # minim = ref_fft[...].imag.min()
+        # maxim = ref_fft[...].imag.max()
+        # items.append(((ref_fft[...].real - minre)/(maxre-minre)).clamp(0,1))
+        # items.append(((out_fft[...].real - minre)/(maxre-minre)).clamp(0,1))
+        # items.append(((ref_fft[...].imag - minim)/(maxim-minim)).clamp(0,1))
+        # items.append(((out_fft[...].imag - minim)/(maxim-minim)).clamp(0,1))
         titles = ["Ref Img", "Out Img", "Ref FFT Real", "Out FFT Real", "Ref FFT Imag", "Out FFT Imag"]
       save_plot(os.path.join(args.outdir, name), *items, titles=titles)
       #save_image(os.path.join(args.outdir, f"got_{i:03}.png"), got)
@@ -861,7 +861,7 @@ def load_model(args):
   if args.model == "tiny": constructor = nerf.TinyNeRF
   elif args.model == "plain": constructor = nerf.PlainNeRF
   elif args.model == "fvr":
-    kwargs["out_features"] = 6
+    kwargs["out_features"] = 3
     constructor = fvrnerf.FVRNeRF
   elif args.model == "learnedfvr":
     constructor = fvrnerf.LearnedFVR
@@ -975,7 +975,7 @@ def main():
   # for some reason AdamW doesn't seem to work here
   # eps = 1e-7 was in the original paper.
   opt = optim.AdamW(parameters, lr=args.learning_rate, weight_decay=args.decay, eps=1e-7, amsgrad=True)
-  # opt = optim.Adam(parameters, lr=args.learning_rate, eps=1e-7)
+  # opt = optim.Adam(parameters, lr=args.learning_rate, eps=1e-7, weight_decay=args.decay)
 
   # TODO should T_max = -1 or args.epochs
   sched = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs, eta_min=5e-5)

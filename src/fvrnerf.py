@@ -9,17 +9,11 @@ from src.nerf import CommonNeRF
 import src.refl as refl
 import math
 
-from src.utils import fat_sigmoid, vec_to_spherical_coords
+from src.utils import dir_to_elev_azim, fat_sigmoid, vec_to_spherical_coords
 
 from .neural_blocks import (
   SkipConnMLP, UpdateOperator, FourierEncoder, PositionalEncoder, NNEncoder
 )
-
-def csinact(x):
-  return torch.complex(torch.sin(x.real), torch.sin(x.imag))
-
-def rsin(x):
-  return F.relu(torch.sin(x))
 
 class FVRNeRF(CommonNeRF):
   def __init__(
@@ -35,32 +29,28 @@ class FVRNeRF(CommonNeRF):
     super().__init__(**kwargs, device=device)
     self.empty_latent = torch.zeros(1,1,1,1,0, device=device, dtype=torch.float)
 
-    self.light_dir_latent = nn.parameter.Parameter(torch.randn(3, device=device, dtype=torch.float))
-
+    self.intermediate_size = intermediate_size
     self.latent_size = 0
     self.mlp = SkipConnMLP(
-      # in_size=3, out=1 + intermediate_size,
-      # in_size=3, out=intermediate_size,
-      in_size=3, out=out_features+256,
+      in_size=3, out=intermediate_size*2,
       latent_size = self.latent_size,
-      num_layers=6, hidden_size=256,
-      # enc=FourierEncoder(input_dims=3, device=device),
+      num_layers=5, hidden_size=256,
+      enc=FourierEncoder(input_dims=3, device=device),
       skip=3,
-      siren_init=True,
-      activations=[torch.sin]*8,
+      xavier_init=True,
+      activations=[F.leaky_relu]*8,
     )
 
-    # self.filter_gen_mlp = SkipConnMLP(
-      # in_size=3, out=1 + intermediate_size,
-      # in_size=3, out=intermediate_size,
-      # in_size=3, out=3*3,
-      # latent_size = self.latent_size,
-      # num_layers=6, hidden_size=64,
-      # enc=FourierEncoder(input_dims=3, device=device),
-      # skip=3,
-      # siren_init=True,
-      # activations=[torch.sin]*8,
-    # )
+    self.out_mlp = SkipConnMLP(
+      in_size=intermediate_size, out=out_features,
+      latent_size = 3,
+      num_layers=3, hidden_size=256,
+      # enc=FourierEncoder(input_dims=intermediate_size, device=device),
+      skip=3,
+      xavier_init=True,
+      activations=[F.leaky_relu]*8,
+    )
+
     self.refl = refl.MultFVRView(
       out_features=6,
       latent_size=256,
@@ -75,44 +65,27 @@ class FVRNeRF(CommonNeRF):
 
   def forward(self, samples):
     pts, r_d = samples.split([3,3], dim=-1)
-    out = torch.zeros_like(pts, dtype=torch.complex64)
-    pmin = pts.size()[1]//2 + 1
-    ptsraw = pts
-    pts = vec_to_spherical_coords(pts)
-    pts = pts[:, :pmin, :, :]
-    view = r_d
-    r_d = r_d[:, :pmin, :, :]
+    # pts = vec_to_spherical_coords(pts)
+    out = self.mlp(pts)
+    re, im = out.split([self.intermediate_size, self.intermediate_size], dim=-1)
+    out = torch.complex(re, im)
 
-    fout, first_latent = self.mlp(pts).split([6, 256], dim=-1)
-    re, im = fout.split([3,3], dim=-1)
-    coeff = torch.complex(re, im) * out.size()[1]
-
-    cue_weights = self.refl(
-      x = pts, latent=first_latent, view=r_d,
-    )
-    coeff = cue_weights * coeff
-
-    # real inputs always have hermitian fft
-    coefft = torch.flip(torch.conj(coeff), (1,2))
-    out[:, :pmin, :, :] = coeff
-    out[:, pmin - 1:, :, :] = coefft
-
-    circle_ratio = 1
-    ii, jj = torch.meshgrid(
-      torch.arange(out.shape[1], device="cuda", dtype=torch.float) - out.shape[1]/2 + 0.5,
-      torch.arange(out.shape[2], device="cuda", dtype=torch.float) - out.shape[2]/2 + 0.5,
-    )
-    positions = torch.stack([ii.transpose(-1, -2), jj.transpose(-1, -2)], dim=-1)
-    circle_mask = positions.norm(dim=-1) > circle_ratio * out.shape[1]//2
-    out[:, circle_mask, :] = 0
+    # circle_ratio = 1
+    # ii, jj = torch.meshgrid(
+    #   torch.arange(out.shape[1], device="cuda", dtype=torch.float) - out.shape[1]/2 + 0.5,
+    #   torch.arange(out.shape[2], device="cuda", dtype=torch.float) - out.shape[2]/2 + 0.5,
+    # )
+    # positions = torch.stack([ii.transpose(-1, -2), jj.transpose(-1, -2)], dim=-1)
+    # circle_mask = positions.norm(dim=-1) > circle_ratio * out.shape[1]//2
+    # out[:, circle_mask, :] = 0
 
     fft = torch.fft.ifftshift(out, dim=(1,2))
     img = torch.fft.ifftn(fft, dim=(1,2), s=(out.size()[1], out.size()[2]), norm="ortho")
-    cimg = img.imag
-    img = img.real
-    img = fat_sigmoid(img)
+    # view = dir_to_elev_azim(r_d)
+    img = self.out_mlp(img.real, r_d)
+    # img = fat_sigmoid(img)
     # TODO: maybe need to change norm so not dependent on size
-    return (img, out, cimg) # + self.sky_color(view, self.weights)
+    return (img, out) # + self.sky_color(view, self.weights)
 
 def empty():
   return None
