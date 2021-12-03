@@ -9,7 +9,7 @@ from src.nerf import CommonNeRF
 import src.refl as refl
 import math
 
-from src.utils import fat_sigmoid
+from src.utils import fat_sigmoid, vec_to_spherical_coords
 
 from .neural_blocks import (
   SkipConnMLP, UpdateOperator, FourierEncoder, PositionalEncoder, NNEncoder
@@ -35,6 +35,8 @@ class FVRNeRF(CommonNeRF):
     super().__init__(**kwargs, device=device)
     self.empty_latent = torch.zeros(1,1,1,1,0, device=device, dtype=torch.float)
 
+    self.light_dir_latent = nn.parameter.Parameter(torch.randn(3, device=device, dtype=torch.float))
+
     self.latent_size = 0
     self.mlp = SkipConnMLP(
       # in_size=3, out=1 + intermediate_size,
@@ -59,22 +61,6 @@ class FVRNeRF(CommonNeRF):
       # siren_init=True,
       # activations=[torch.sin]*8,
     # )
-
-    # self.mlp2 = SkipConnMLP(
-      # in_size=3, out=1 + intermediate_size,
-      # in_size=2*intermediate_size, out=out_features,
-      # latent_size = self.latent_size,
-      # num_layers=2, hidden_size=256,
-      # enc=FourierEncoder(input_dims=2*intermediate_size, device=device),
-    #   kaiming_init=True,
-    # )
-    # self.mlp = SkipConnMLP(
-    #   in_size=3, out=out_features,
-    #   latent_size = 0,
-    #   num_layers=9, hidden_size=256,
-    #   enc=FourierEncoder(input_dims=3, device=device),
-    #   xavier_init=True,
-    # )
     self.refl = refl.MultFVRView(
       out_features=6,
       latent_size=256,
@@ -90,20 +76,13 @@ class FVRNeRF(CommonNeRF):
   def forward(self, samples):
     pts, r_d = samples.split([3,3], dim=-1)
     out = torch.zeros_like(pts, dtype=torch.complex64)
-    # out = torch.zeros_like(pts[..., 0], dtype=torch.complex64)
-    # out = out[..., None]
-    # out = out.expand(-1,-1,-1,4)
-    # out = out.clone()
     pmin = pts.size()[1]//2 + 1
     ptsraw = pts
-    # pts = pts[:, :, pmin-1:, :]
+    pts = vec_to_spherical_coords(pts)
     pts = pts[:, :pmin, :, :]
     view = r_d
     r_d = r_d[:, :pmin, :, :]
-    # latent = self.curr_latent(pts.shape)
-    # hemisphere = torch.sign(view[:, :, :, [-1]])
-    # signed_pts = torch.cat([pts, hemisphere], dim=-1)
-    # fout = self.mlp(pts)
+
     fout, first_latent = self.mlp(pts).split([6, 256], dim=-1)
     re, im = fout.split([3,3], dim=-1)
     coeff = torch.complex(re, im) * out.size()[1]
@@ -111,58 +90,27 @@ class FVRNeRF(CommonNeRF):
     cue_weights = self.refl(
       x = pts, latent=first_latent, view=r_d,
     )
-    # cwa, cwb = cue_weights.split([1,1], dim=-1)
-    coeff = cue_weights * coeff # + cwb
+    coeff = cue_weights * coeff
 
-    # re, im = fourier.split([3,3], dim=-1)
-    # coeff = torch.complex(re, im) * out.size()[1]
     # real inputs always have hermitian fft
     coefft = torch.flip(torch.conj(coeff), (1,2))
     out[:, :pmin, :, :] = coeff
     out[:, pmin - 1:, :, :] = coefft
 
-    # nchan = 6
-    # fsize = 3
-    # view_filter = self.filter_gen_mlp(r_d[0, 0, 0, :]).reshape((fsize,fsize)).expand((nchan, 1, -1,-1))
-    # todo: add in first latent
-    # out = torch.cat([out.real, out.imag], dim=-1)
-    # out = torch.cat([out, view, ptsraw], dim=-1)
-    # out is [N, H, W, C]
-    # permute to [N, C, H, W] for conv
-    # out = out.permute((0,3,1,2))
-    # print(view_filter.shape, out.shape)
-    # out = F.conv2d(out, view_filter, padding=0, groups=nchan)
-    # print(out.shape)
-    # out = self.conv(out)
-    # out = self.upconv(out)
-    # out = self.conv2(out)
-    # out = self.conv3(out)
-    # out = self.conv4(out)
-    # permute back to [N, H, W, C]
-    # out = out.permute((0,2,3,1))
-    # re, im = out.split([3,3], dim=-1)
-    # out = torch.complex(re, im)
-
-    # fft = torch.fft.ifftshift(coeff, dim=(1))
-
-    # circle_ratio = 1
-    # ii, jj = torch.meshgrid(
-    #   torch.arange(out.shape[1], device="cuda", dtype=torch.float) - out.shape[1]/2 + 0.5,
-    #   torch.arange(out.shape[2], device="cuda", dtype=torch.float) - out.shape[2]/2 + 0.5,
-    # )
-    # positions = torch.stack([ii.transpose(-1, -2), jj.transpose(-1, -2)], dim=-1)
-    # circle_mask = positions.norm(dim=-1) > circle_ratio * out.shape[1]//2
-    # out[:, circle_mask, :] = 0
+    circle_ratio = 1
+    ii, jj = torch.meshgrid(
+      torch.arange(out.shape[1], device="cuda", dtype=torch.float) - out.shape[1]/2 + 0.5,
+      torch.arange(out.shape[2], device="cuda", dtype=torch.float) - out.shape[2]/2 + 0.5,
+    )
+    positions = torch.stack([ii.transpose(-1, -2), jj.transpose(-1, -2)], dim=-1)
+    circle_mask = positions.norm(dim=-1) > circle_ratio * out.shape[1]//2
+    out[:, circle_mask, :] = 0
 
     fft = torch.fft.ifftshift(out, dim=(1,2))
     img = torch.fft.ifftn(fft, dim=(1,2), s=(out.size()[1], out.size()[2]), norm="ortho")
-    # img = torch.fft.irfftn(fft, dim=(1,2), s=(out.size()[1], out.size()[1]), norm="ortho")
     cimg = img.imag
     img = img.real
     img = fat_sigmoid(img)
-    # img = (torch.sin(img)+1)/2
-    # TODO: predict coefficients of some set of basis functions (fourier basis in this case)
-    # to reduce the output solution space
     # TODO: maybe need to change norm so not dependent on size
     return (img, out, cimg) # + self.sky_color(view, self.weights)
 

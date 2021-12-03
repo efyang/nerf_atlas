@@ -148,15 +148,19 @@ class ConicGaussian(nn.Module):
 
 def save_image(name, img):
   plt.imsave(name, img.detach().cpu().clamp(0,1).numpy())
-def save_plot(name, expected, *got):
+def save_plot(name, expected, *got, titles=None):
   fig = plt.figure(figsize=((len(got)+2)*4,16))
   fig.add_subplot(1, 1+len(got), 1)
   plt.imshow(expected.detach().squeeze().cpu().numpy())
+  if titles:
+    plt.title(titles[0])
   plt.grid("off");
   plt.axis("off");
   for i, g in enumerate(got):
     fig.add_subplot(1, 1+len(got), 2 + i)
     plt.imshow(g.detach().squeeze().cpu().numpy())
+    if titles:
+      plt.title(titles[i+1])
     plt.grid("off");
     plt.axis("off");
   plt.savefig(name, bbox_inches='tight')

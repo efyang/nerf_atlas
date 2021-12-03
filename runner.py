@@ -498,7 +498,7 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
     if args.omit_bg and (i % args.save_freq) != 0 and (i % args.valid_freq) != 0 and \
       ref.mean() + 0.3 < sqr(random.random()): continue
 
-    out, rays = render(model, cam[idxs], crop, size=args.render_size, times=ts, args=args, with_noise=0.4)
+    out, rays = render(model, cam[idxs], crop, size=args.render_size, times=ts, args=args, with_noise=0.5)
     if isinstance(model, fvrnerf.FVRNeRF) or isinstance(model, fvrnerf.LearnedFVR):
       out, out_fft, cimg = out
       # out *= math.sqrt(args.render_size)
@@ -636,6 +636,7 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
             depth_normal = (50*utils.depth_to_normals(depth)+1)/2
             items.append(depth_normal.clamp(min=0, max=1))
 
+        titles = None
         if isinstance(model, fvrnerf.FVRNeRF) or isinstance(model, fvrnerf.LearnedFVR):
           minre = ref_fft[0,...].real.min()
           maxre = ref_fft[0,...].real.max()
@@ -645,7 +646,8 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
           items.append(((out_fft[0,...].real - minre)/(maxre-minre)).clamp(0,1))
           items.append(((ref_fft[0,...].imag - minim)/(maxim-minim)).clamp(0,1))
           items.append(((out_fft[0,...].imag - minim)/(maxim-minim)).clamp(0,1))
-        save_plot(os.path.join(args.outdir, f"valid_{i:05}.png"), *items)
+          titles = ["Ref Img", "Out Img", "Ref FFT Real", "Out FFT Real", "Ref FFT Imag", "Out FFT Imag"]
+        save_plot(os.path.join(args.outdir, f"valid_{i:05}.png"), *items, titles=titles)
 
     if i % args.save_freq == 0 and i != 0:
       save(model, args)
@@ -744,6 +746,7 @@ def test(model, cam, labels, args, training: bool = True, light=None):
       if args.draw_colormap:
         colormap = utils.color_map(cam[i:i+1])
         items.append(colormap) 
+      titles = None
       if isinstance(model, fvrnerf.FVRNeRF) or isinstance(model, fvrnerf.LearnedFVR):
         minre = ref_fft[...].real.min()
         maxre = ref_fft[...].real.max()
@@ -753,7 +756,8 @@ def test(model, cam, labels, args, training: bool = True, light=None):
         items.append(((out_fft[...].real - minre)/(maxre-minre)).clamp(0,1))
         items.append(((ref_fft[...].imag - minim)/(maxim-minim)).clamp(0,1))
         items.append(((out_fft[...].imag - minim)/(maxim-minim)).clamp(0,1))
-      save_plot(os.path.join(args.outdir, name), *items)
+        titles = ["Ref Img", "Out Img", "Ref FFT Real", "Out FFT Real", "Ref FFT Imag", "Out FFT Imag"]
+      save_plot(os.path.join(args.outdir, name), *items, titles=titles)
       #save_image(os.path.join(args.outdir, f"got_{i:03}.png"), got)
       ls.append(psnr)
 

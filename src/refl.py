@@ -225,8 +225,8 @@ class MultFVRView(Reflectance):
   def forward(self, x, view, normal=None, light=None, latent=None):
     v = self.view_enc(view)
     # ret = self.mlp(x, latent)
-    latent = torch.cat([latent, v], dim=-1)
-    ret = self.mlp(x, latent)
+    latent = torch.cat([latent, x], dim=-1)
+    ret = self.mlp(v, latent)
     re, im = ret.split([3, 3], dim=-1)
     c = torch.complex(re, im)
     # w = torch.sum(v * c, dim=-1)
