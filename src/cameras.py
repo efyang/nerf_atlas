@@ -112,6 +112,7 @@ class FVRNeRFCamera(Camera):
     if with_noise:
       # slice_positions += (torch.rand_like(slice_positions) - 0.5) * 0.1 *with_noise
       slice_positions += (torch.randn_like(slice_positions) * with_noise * (distances[..., None])).clamp(-with_noise*3, with_noise*3)
+      # r_d = F.normalize(r_d + (torch.rand_like(r_d)-0.5)*0.05, dim=-1)
       # r_d += torch.randn_like(slice_positions) * with_noise * 0.05
       # r_d = F.normalize(r_d, dim=-1)
     # return the slice through the origin parallel to image plane

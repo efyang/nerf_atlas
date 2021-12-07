@@ -355,7 +355,7 @@ def render(
   times=None, with_noise=1.0,
 ):
   # if isinstance(model, fvrnerf.FVRNeRF):
-  #   size += 2
+    # size = size * 2
   ii, jj = torch.meshgrid(
     torch.arange(size, device=device, dtype=torch.float),
     torch.arange(size, device=device, dtype=torch.float),
@@ -380,7 +380,7 @@ def save_losses(args, losses, scale="linear"):
 
   window = min(window, len(losses))
   losses = np.convolve(losses, np.ones(window)/window, mode='valid')
-  losses = losses[args.skip_loss:]
+  losses = losses[args.skip_loss-1:]
   plt.figure(figsize=(16,12))
   plt.title("Training Loss")
   plt.xlabel("# Epochs")
@@ -444,13 +444,13 @@ def load_loss_fn(args, model):
 
 # train the model with a given camera and some labels (imgs or imgs+times)
 # light is a per instance light.
-def train(model, cam, labels, opt, args, light=None, sched=None):
+def train(model, cam, labels, opt, args, light=None, sched=None, epoch=0, losses=[]):
   # torch.autograd.set_detect_anomaly(True)
   if args.epochs == 0: return
 
   loss_fn = load_loss_fn(args, model)
 
-  iters = range(args.epochs) if args.quiet else trange(args.epochs)
+  iters = range(epoch, args.epochs) if args.quiet else trange(epoch, args.epochs)
   update = lambda kwargs: iters.set_postfix(**kwargs)
   if args.quiet: update = lambda _: None
   batch_size = min(args.batch_size, len(cam))
@@ -470,7 +470,6 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
   if args.serial_idxs: next_idxs = lambda i: [i%len(cam)] * batch_size
   #next_idxs = lambda i: [i%10] * batch_size # DEBUG
 
-  losses = []
   start = time.time()
   should_end = lambda: False
   if args.duration_sec > 0: should_end = lambda: time.time() - start > args.duration_sec
@@ -638,21 +637,16 @@ def train(model, cam, labels, opt, args, light=None, sched=None):
 
         titles = None
         if isinstance(model, fvrnerf.FVRNeRF) or isinstance(model, fvrnerf.LearnedFVR):
-          # minre = ref_fft[0,...].real.min()
-          # maxre = ref_fft[0,...].real.max()
-          # minim = ref_fft[0,...].imag.min()
-          # maxim = ref_fft[0,...].imag.max()
-          # items.append(((ref_fft[0,...].real - minre)/(maxre-minre)).clamp(0,1))
-          # items.append(((out_fft[0,...].real - minre)/(maxre-minre)).clamp(0,1))
-          # items.append(((ref_fft[0,...].imag - minim)/(maxim-minim)).clamp(0,1))
-          # items.append(((out_fft[0,...].imag - minim)/(maxim-minim)).clamp(0,1))
-          titles = ["Ref Img", "Out Img", "Ref FFT Real", "Out FFT Real", "Ref FFT Imag", "Out FFT Imag"]
+          items.append(F.normalize(ref_fft[0,...].abs().norm(dim=-1)))
+          items.append(F.normalize(out_fft[0,...].abs().norm(dim=-1)))
+          titles = ["Reference Image", f"Predicted Image | L2: {loss:.1E}", "Reference FT Norm", "Predicted Feature FT Norm"]
         save_plot(os.path.join(args.outdir, f"valid_{i:05}.png"), *items, titles=titles)
 
     if i % args.save_freq == 0 and i != 0:
-      save(model, args)
+      save(model, opt, sched, losses, i, args)
+    if i % (args.save_freq//4) == 0 and i - min(args.loss_window, len(losses)) > max(0, args.skip_loss): 
       save_losses(args, losses, "log")
-  save(model, args)
+  save(model, opt, sched, losses, i, args)
   save_losses(args, losses, "log")
 
 def test(model, cam, labels, args, training: bool = True, light=None):
@@ -748,15 +742,9 @@ def test(model, cam, labels, args, training: bool = True, light=None):
         items.append(colormap) 
       titles = None
       if isinstance(model, fvrnerf.FVRNeRF) or isinstance(model, fvrnerf.LearnedFVR):
-        # minre = ref_fft[...].real.min()
-        # maxre = ref_fft[...].real.max()
-        # minim = ref_fft[...].imag.min()
-        # maxim = ref_fft[...].imag.max()
-        # items.append(((ref_fft[...].real - minre)/(maxre-minre)).clamp(0,1))
-        # items.append(((out_fft[...].real - minre)/(maxre-minre)).clamp(0,1))
-        # items.append(((ref_fft[...].imag - minim)/(maxim-minim)).clamp(0,1))
-        # items.append(((out_fft[...].imag - minim)/(maxim-minim)).clamp(0,1))
-        titles = ["Ref Img", "Out Img", "Ref FFT Real", "Out FFT Real", "Ref FFT Imag", "Out FFT Imag"]
+        items.append(F.normalize(ref_fft.abs().norm(dim=-1)))
+        items.append(F.normalize(out_fft.abs().norm(dim=-1)))
+        titles = ["Reference Image", f"Predicted Image | L2: {loss:.1E}", "Reference FT Norm", "Predicted Feature FT Norm"]
       save_plot(os.path.join(args.outdir, name), *items, titles=titles)
       #save_image(os.path.join(args.outdir, f"got_{i:03}.png"), got)
       ls.append(psnr)
@@ -929,11 +917,17 @@ def load_model(args):
   if args.volsdf_alternate: model = nerf.AlternatingVolSDF(model)
   return model
 
-def save(model, args):
+def save(model, opt, sched, losses, epoch, args):
   if args.nosave: return
   print(f"Saved to {args.save}")
   if args.torchjit: raise NotImplementedError()
-  else: torch.save(model, args.save)
+  else: torch.save({
+    'epoch': epoch,
+    'model_state_dict': model.state_dict(),
+    'optimizer_state_dict': opt.state_dict(),
+    'scheduler_state_dict': sched.state_dict() if sched else None,
+    'losses': losses,
+  }, args.save)
   if args.log is not None:
     setattr(args, "curr_time", datetime.today().strftime('%Y-%m-%d-%H:%M:%S'))
     with open(os.path.join(args.outdir, args.log), 'w') as f:
@@ -956,7 +950,12 @@ def main():
     else: labels = labels[:args.train_imgs, ...]
     cam = cam[:args.train_imgs, ...]
 
-  model = load_model(args) if args.load is None else torch.load(args.load, map_location=device)
+  model = load_model(args)
+  if args.load:
+    checkpoint = torch.load(args.load, map_location=device)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    losses = checkpoint['losses']
+    epoch = checkpoint['epoch']
   set_per_run(model, args)
 
   if "all" in args.train_parts: parameters = model.parameters()
@@ -974,13 +973,21 @@ def main():
 
   # for some reason AdamW doesn't seem to work here
   # eps = 1e-7 was in the original paper.
-  opt = optim.AdamW(parameters, lr=args.learning_rate, weight_decay=args.decay, eps=1e-7, amsgrad=True)
-  # opt = optim.Adam(parameters, lr=args.learning_rate, eps=1e-7, weight_decay=args.decay)
+  opt = optim.AdamW(parameters, lr=args.learning_rate, weight_decay=args.decay, eps=1e-8, amsgrad=True)
+  # opt = optim.Adam(parameters, lr=args.learning_rate, eps=1e-7, weight_decay=args.decay, amsgrad=True)
 
   # TODO should T_max = -1 or args.epochs
-  sched = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs, eta_min=5e-5)
-  if args.no_sched: sched = None
-  train(model, cam, labels, opt, args, light=light, sched=sched)
+  sched = None
+  if args.epochs > 0 and not args.no_sched:
+    sched = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs, eta_min=1e-4)
+    # sched = optim.lr_scheduler.OneCycleLR(opt, total_steps=args.epochs, max_lr=args.learning_rate, final_div_factor=args.learning_rate/1e-4)
+  if args.load:
+    opt.load_state_dict(checkpoint['optimizer_state_dict'])
+    # if sched:
+    #   sched.load_state_dict(checkpoint['scheduler_state_dict'])
+    train(model, cam, labels, opt, args, light=light, sched=sched, losses=losses, epoch=epoch)
+  else:
+    train(model, cam, labels, opt, args, light=light, sched=sched)
 
 
   if not args.notraintest: test(model, cam, labels, args, training=True, light=light)

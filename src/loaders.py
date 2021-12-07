@@ -114,7 +114,6 @@ def ortho(
   exp_imgs = []
   cam_to_worlds = []
   ortho_scale = float(tfs['camera_ortho_scale'])
-  print(ortho_scale)
   for i, frame in enumerate(tfs["frames"]):
     fp = frame['file_path']
     if fp == "":
