@@ -41,17 +41,17 @@ class FVRNeRF(CommonNeRF):
       activations=[F.leaky_relu]*8,
     )
 
-    self.middle_fenc = FourierEncoder(input_dims=3, device=device)
-    self.middle_mlp = SkipConnMLP(
-      in_size=intermediate_size*2, out=intermediate_size*2,
-      # latent_size=self.middle_fenc.output_dims(),
-      latent_size=3,
-      num_layers=3, hidden_size=256,
-      # enc=FourierEncoder(input_dims=6, device=device),
-      skip=3,
-      xavier_init=True,
-      activations=[F.leaky_relu]*8,
-    )
+    # self.middle_fenc = FourierEncoder(input_dims=3, device=device)
+    # self.middle_mlp = SkipConnMLP(
+    #   in_size=intermediate_size*2, out=intermediate_size*2,
+    #   # latent_size=self.middle_fenc.output_dims(),
+    #   latent_size=3,
+    #   num_layers=3, hidden_size=256,
+    #   # enc=FourierEncoder(input_dims=6, device=device),
+    #   skip=3,
+    #   xavier_init=True,
+    #   activations=[F.leaky_relu]*8,
+    # )
 
     self.out_mlp = SkipConnMLP(
       in_size=intermediate_size, out=out_features,
@@ -63,7 +63,7 @@ class FVRNeRF(CommonNeRF):
       activations= [F.leaky_relu]*8,
     )
 
-    self.pool = nn.MaxPool2d(2)
+    # self.pool = nn.MaxPool2d(2)
 
     # self.conv = nn.Sequential(
     #   nn.Conv2d(intermediate_size*2+3, intermediate_size*2, kernel_size=3),
@@ -143,7 +143,7 @@ class LearnedFVR(CommonNeRF):
   def __init__(
     self,
     out_features: int = 3,
-    # intermediate_size: int = 32,
+    intermediate_size: int = 32,
     device: torch.device = "cuda",
     **kwargs,
   ):
@@ -161,8 +161,19 @@ class LearnedFVR(CommonNeRF):
       latent_size=0,
     )
 
-    self.resolution = 101
-    self.fourier_volume = nn.parameter.Parameter(torch.zeros(self.resolution, self.resolution, self.resolution, 6, device=device))
+    self.resolution = 129
+    self.intermediate_size = intermediate_size
+    self.fourier_volume = nn.parameter.Parameter(torch.zeros(self.resolution, self.resolution, self.resolution, self.intermediate_size * 2, device=device))
+
+    self.out_mlp = SkipConnMLP(
+      in_size=intermediate_size, out=out_features,
+      latent_size=3,
+      num_layers=3, hidden_size=256,
+      # enc=FourierEncoder(input_dims=intermediate_size, device=device),
+      skip=3,
+      xavier_init=True,
+      activations= [F.leaky_relu]*8,
+    )
     if isinstance(self.refl, refl.LightAndRefl): self.refl.refl.act = self.feat_act
     else: self.refl.act = self.feat_act
  
@@ -202,7 +213,7 @@ class LearnedFVR(CommonNeRF):
     c1 = c01 * (1-yd[..., None]) + c11 * yd[..., None]
 
     c = c0 * (1-zd[..., None]) + c1 * zd[..., None]
-    re, im = c.split([3, 3], dim=-1)
+    re, im = c.split([self.intermediate_size, self.intermediate_size], dim=-1)
     return torch.complex(re, im)
 
   def forward(self, samples):
@@ -210,12 +221,12 @@ class LearnedFVR(CommonNeRF):
     maxdiam = math.ceil(size * math.sqrt(2))+2
 
     pts, r_d = samples.split([3,3], dim=-1)
-    pts = pts*(self.resolution/maxdiam) + self.resolution//2
+    pts = pts*(self.resolution/(maxdiam + 3)) + self.resolution//2
     out = torch.zeros_like(pts, dtype=torch.complex64)
 
     out = self.trilinear_interp_vec(pts)
 
-    circle_ratio = 0.25
+    circle_ratio = 0.5
     ii, jj = torch.meshgrid(
       torch.arange(out.shape[1], device="cuda", dtype=torch.float) - out.shape[1]/2 + 0.5,
       torch.arange(out.shape[2], device="cuda", dtype=torch.float) - out.shape[2]/2 + 0.5,
@@ -226,6 +237,7 @@ class LearnedFVR(CommonNeRF):
 
     fft = torch.fft.ifftshift(out, dim=(1,2))
     img = torch.fft.ifftn(fft, dim=(1,2), s=(out.size()[1], out.size()[2]), norm="ortho")
-    cimg = img.imag
-    img = img.real
-    return (img, out, cimg) # + self.sky_color(view, self.weights)
+
+    img = self.out_mlp(img.real, r_d)
+
+    return (img, out) # + self.sky_color(view, self.weights)

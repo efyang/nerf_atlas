@@ -148,14 +148,18 @@ class ConicGaussian(nn.Module):
 
 def save_image(name, img):
   plt.imsave(name, img.detach().cpu().clamp(0,1).numpy())
-def save_plot(name, expected, *got, titles=None):
-  fig = plt.figure(figsize=((len(got)+2)*4,16))
+def save_plot(name, expected, *got, bigtitle=None, titles=None):
+  fig = plt.figure(figsize=((len(got)+2)*4,5))
+  plt.grid("off");
+  plt.axis("off");
+  if bigtitle:
+    plt.title(bigtitle)
   fig.add_subplot(1, 1+len(got), 1)
+  plt.grid("off");
+  plt.axis("off");
   plt.imshow(expected.detach().squeeze().cpu().numpy())
   if titles:
     plt.title(titles[0])
-  plt.grid("off");
-  plt.axis("off");
   for i, g in enumerate(got):
     fig.add_subplot(1, 1+len(got), 2 + i)
     plt.imshow(g.detach().squeeze().cpu().numpy())
@@ -211,7 +215,9 @@ def rotation_matrix(a, b, c, device="cuda"):
   rc = torch.stack([torch.Tensor([1, 0, 0]),
                     torch.Tensor([0, c.cos(), -c.sin()]),
                     torch.Tensor([0, c.sin(), c.cos()])]).to(device)
-  return ra * rb * rc
+  R = torch.mm(ra, rb)
+  R = torch.mm(R, rc)
+  return R
 
 # [-1, 1] -> [-pi/2, pi/2]
 #@torch.jit.script

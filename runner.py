@@ -374,7 +374,7 @@ def render(
 
 def sqr(x): return x * x
 
-def save_losses(args, losses, scale="linear"):
+def save_losses(args, losses, val_losses, scale="linear"):
   outdir = args.outdir
   window = args.loss_window
 
@@ -382,19 +382,34 @@ def save_losses(args, losses, scale="linear"):
   losses = np.convolve(losses, np.ones(window)/window, mode='valid')
   losses = losses[args.skip_loss-1:]
   plt.figure(figsize=(16,12))
-  plt.title("Training Loss")
+  plt.title("Loss Curves")
   plt.xlabel("# Epochs")
   plt.ylabel("Loss")
   plt.yscale(scale)
   n_annotations = 10
   s = len(losses) // n_annotations
-  plt.plot(range(len(losses)), losses, marker='o', markevery=s)
+  plt.plot(range(args.skip_loss,len(losses)+args.skip_loss), losses, marker='o', markevery=s)
   for i in range(n_annotations):
-    plt.annotate('%0.2e' % losses[s*i], xy=(s*i, losses[s*i]), xytext=(8, 8), 
+    plt.annotate('%0.2e' % losses[s*i], xy=(s*i+args.skip_loss, losses[s*i]), xytext=(8, 8), 
                 xycoords=('data', 'data'), textcoords='offset points')
-  plt.annotate('%0.2e' % losses[-1], xy=(len(losses)-1, losses[-1]), xytext=(-4, 8), 
+  plt.annotate('%0.2e' % losses[-1], xy=(len(losses)-1+args.skip_loss, losses[-1]), xytext=(-4, 8), 
               xycoords=('data', 'data'), textcoords='offset points')
-  plt.savefig(os.path.join(outdir, "training_loss.png"), bbox_inches='tight')
+
+  if len(val_losses) > 0:
+    n_annotations = round(n_annotations * 3/4)
+    val_losses = np.convolve(val_losses, np.ones(window)/window, mode='valid')
+    val_losses = val_losses[args.skip_loss-1:]
+    s = len(val_losses) // n_annotations
+    plt.plot(range(args.skip_loss,len(val_losses)+args.skip_loss), val_losses, marker='o', markevery=s)
+    for i in range(n_annotations):
+      plt.annotate('%0.2e' % val_losses[s*i], xy=(s*i+args.skip_loss, val_losses[s*i]), xytext=(8, 8), 
+                  xycoords=('data', 'data'), textcoords='offset points')
+    plt.annotate('%0.2e' % val_losses[-1], xy=(len(val_losses)-1+args.skip_loss, val_losses[-1]), xytext=(-4, 8), 
+                xycoords=('data', 'data'), textcoords='offset points')
+    plt.legend(['Training Loss', 'Validation Loss'])
+
+
+  plt.savefig(os.path.join(outdir, "loss.png"), bbox_inches='tight')
   plt.close()
 
 def load_loss_fn(args, model):
@@ -444,7 +459,7 @@ def load_loss_fn(args, model):
 
 # train the model with a given camera and some labels (imgs or imgs+times)
 # light is a per instance light.
-def train(model, cam, labels, opt, args, light=None, sched=None, epoch=0, losses=[]):
+def train(model, cam, labels, opt, args, val_labels=None, val_cam=None, light=None, sched=None, epoch=0, losses=[], val_losses=[]):
   # torch.autograd.set_detect_anomaly(True)
   if args.epochs == 0: return
 
@@ -467,6 +482,8 @@ def train(model, cam, labels, opt, args, light=None, sched=None, epoch=0, losses
     )
 
   next_idxs = lambda _: random.sample(range(len(cam)), batch_size)
+  if val_labels != None and val_cam != None:
+    next_val_idxs = lambda _: random.sample(range(len(val_cam)), 1)
   if args.serial_idxs: next_idxs = lambda i: [i%len(cam)] * batch_size
   #next_idxs = lambda i: [i%10] * batch_size # DEBUG
 
@@ -484,8 +501,21 @@ def train(model, cam, labels, opt, args, light=None, sched=None, epoch=0, losses
     idxs = next_idxs(i)
 
     ts = None if times is None else times[idxs]
+    if val_labels != None and val_cam != None:
+      val_ts = None if times is None else times[val_idxs]
     c0,c1,c2,c3 = crop = get_crop()
     ref = labels[idxs][:, c0:c0+c2,c1:c1+c3, :]
+
+    if val_labels != None and val_cam != None:
+      val_idxs = next_val_idxs(i)
+      val_ref = val_labels[val_idxs][:, c0:c0+c2,c1:c1+c3, :]
+      with torch.no_grad():
+        val_out, rays = render(model, val_cam[val_idxs], crop, size=args.render_size, times=val_ts, args=args, with_noise=None)
+        if isinstance(model, fvrnerf.FVRNeRF) or isinstance(model, fvrnerf.LearnedFVR):
+          val_out, val_out_fft = val_out
+          val_loss = loss_fn(val_ref, val_out)
+          val_loss = val_loss.item()
+          val_losses.append(val_loss)
 
     if light is not None: model.refl.light = light[idxs]
     # TODO this feels wrong somehow? How to more elegantly handle case of indexing refl.light
@@ -497,36 +527,23 @@ def train(model, cam, labels, opt, args, light=None, sched=None, epoch=0, losses
     if args.omit_bg and (i % args.save_freq) != 0 and (i % args.valid_freq) != 0 and \
       ref.mean() + 0.3 < sqr(random.random()): continue
 
-    out, rays = render(model, cam[idxs], crop, size=args.render_size, times=ts, args=args, with_noise=0.5)
+    out, rays = render(model, cam[idxs], crop, size=args.render_size, times=ts, args=args, with_noise=1.0)
     if isinstance(model, fvrnerf.FVRNeRF) or isinstance(model, fvrnerf.LearnedFVR):
       out, out_fft = out
-      # out *= math.sqrt(args.render_size)
-      # print(torch.fft.rfftn(ref, dim=(1,2), norm="ortho").shape)
-      # print(torch.fft.fftn(ref, dim=(1,2), norm="ortho").shape)
       ref_fft = torch.fft.fftn(ref, dim=(1,2), norm="ortho")
-      # ref_fft = torch.fft.rfftn(ref, dim=(1,2), norm="ortho")
-      # ref_fft = torch.fft.fftshift(ref_fft, dim=(1))
       ref_fft = torch.fft.fftshift(ref_fft, dim=(1,2))
-      # lossWeighting = linear_dist_center_weights(ref_fft.shape[1], ref_fft.shape[2], 0.01)
-      # out_fft = out_fft * lossWeighting[None, :, :, None]
-      # ref_fft = ref_fft * lossWeighting[None, :, :, None]
-      # fftloss = 2*(loss_fn(out_fft.real, ref_fft.real) + loss_fn(out_fft.imag, ref_fft.imag))
-      # lossratio = min((2*i / args.epochs), 1.)
-      # loss = (1-lossratio) * fftloss + lossratio * loss_fn(out, ref)
-      # loss = fftloss + loss_fn(out, ref)
-      # loss = fftloss
-      # converges slowly - learns really garbage freq domain tbh
-      # zeros = torch.zeros_like(cimg)
-      loss = loss_fn(out, ref) #+ loss_fn(cimg, zeros)
+      loss = loss_fn(out, ref)
     else:
       loss = loss_fn(out, ref)
 
     assert(loss.isfinite()), f"Got {loss.item()} loss"
     l2_loss = loss.item()
     display = {
-      "l2": f"{l2_loss:.04e}",
+      "Lt": f"{l2_loss:.03e}",
       "refresh": False,
     }
+    if val_labels != None and val_cam != None:
+      display["Lv"] = f"{val_loss:.03e}"
     if sched is not None: display["lr"] = f"{sched.get_last_lr()[0]:.1e}"
 
     if args.latent_l2_weight > 0: loss = loss + model.nerf.latent_l2_loss * latent_l2_weight
@@ -639,15 +656,24 @@ def train(model, cam, labels, opt, args, light=None, sched=None, epoch=0, losses
         if isinstance(model, fvrnerf.FVRNeRF) or isinstance(model, fvrnerf.LearnedFVR):
           items.append(F.normalize(ref_fft[0,...].abs().norm(dim=-1)))
           items.append(F.normalize(out_fft[0,...].abs().norm(dim=-1)))
-          titles = ["Reference Image", f"Predicted Image | L2: {loss:.1E}", "Reference FT Norm", "Predicted Feature FT Norm"]
-        save_plot(os.path.join(args.outdir, f"valid_{i:05}.png"), *items, titles=titles)
+          if val_labels != None and val_cam != None:
+            items.append(val_ref[0,...,:3])
+            items.append(val_out[0,...,:3].clamp(min=0, max=1))
+          titles = ["Reference Train Image",
+                    f"Predicted Train Image | L2: {loss:.1E}",
+                    "Reference Train FT Norm",
+                    "Predicted Train Feature FT Norm",
+                    "Reference Validation Image",
+                    f"Predicted Validation Image | L2: {val_loss:.1E}",
+                    ]
+        save_plot(os.path.join(args.outdir, f"valid_{i:05}.png"), *items, titles=titles, bigtitle=f"Epoch {i}")
 
     if i % args.save_freq == 0 and i != 0:
-      save(model, opt, sched, losses, i, args)
-    if i % (args.save_freq//4) == 0 and i - min(args.loss_window, len(losses)) > max(0, args.skip_loss): 
-      save_losses(args, losses, "log")
-  save(model, opt, sched, losses, i, args)
-  save_losses(args, losses, "log")
+      save(model, opt, sched, losses, val_losses, i, args)
+    if i % (args.save_freq//8) == 0 and i - min(args.loss_window, len(losses)) > max(0, args.skip_loss): 
+      save_losses(args, losses, val_losses, "log")
+  save(model, opt, sched, losses, val_losses, i, args)
+  save_losses(args, losses, val_losses, "log")
 
 def test(model, cam, labels, args, training: bool = True, light=None):
   times = None
@@ -917,7 +943,7 @@ def load_model(args):
   if args.volsdf_alternate: model = nerf.AlternatingVolSDF(model)
   return model
 
-def save(model, opt, sched, losses, epoch, args):
+def save(model, opt, sched, losses, val_losses, epoch, args):
   if args.nosave: return
   print(f"Saved to {args.save}")
   if args.torchjit: raise NotImplementedError()
@@ -927,6 +953,7 @@ def save(model, opt, sched, losses, epoch, args):
     'optimizer_state_dict': opt.state_dict(),
     'scheduler_state_dict': sched.state_dict() if sched else None,
     'losses': losses,
+    'val_losses': val_losses,
   }, args.save)
   if args.log is not None:
     setattr(args, "curr_time", datetime.today().strftime('%Y-%m-%d-%H:%M:%S'))
@@ -944,6 +971,7 @@ def main():
   seed(args.seed)
 
   labels, cam, light = loaders.load(args, training=True, device=device)
+  val_labels, val_cam, val_light = loaders.load(args, training=False, validation=True, device=device)
   setattr(args, "num_labels", len(labels))
   if args.train_imgs > 0:
     if type(labels) == tuple: labels = tuple(l[:args.train_imgs, ...] for l in labels)
@@ -955,6 +983,7 @@ def main():
     checkpoint = torch.load(args.load, map_location=device)
     model.load_state_dict(checkpoint['model_state_dict'])
     losses = checkpoint['losses']
+    val_losses = checkpoint['val_losses']
     epoch = checkpoint['epoch']
   set_per_run(model, args)
 
@@ -979,15 +1008,15 @@ def main():
   # TODO should T_max = -1 or args.epochs
   sched = None
   if args.epochs > 0 and not args.no_sched:
-    sched = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs, eta_min=1e-4)
+    sched = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs, eta_min=5e-4)
     # sched = optim.lr_scheduler.OneCycleLR(opt, total_steps=args.epochs, max_lr=args.learning_rate, final_div_factor=args.learning_rate/1e-4)
   if args.load:
     opt.load_state_dict(checkpoint['optimizer_state_dict'])
     # if sched:
     #   sched.load_state_dict(checkpoint['scheduler_state_dict'])
-    train(model, cam, labels, opt, args, light=light, sched=sched, losses=losses, epoch=epoch)
+    train(model, cam, labels, opt, args, val_labels=val_labels, val_cam=val_cam, light=light, sched=sched, losses=losses, val_losses=val_losses, epoch=epoch)
   else:
-    train(model, cam, labels, opt, args, light=light, sched=sched)
+    train(model, cam, labels, opt, args, val_labels=val_labels, val_cam=val_cam, light=light, sched=sched)
 
 
   if not args.notraintest: test(model, cam, labels, args, training=True, light=light)

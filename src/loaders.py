@@ -18,7 +18,7 @@ from .utils import load_image
 import src.lights as lights
 
 # loads the dataset
-def load(args, training=True, device="cuda"):
+def load(args, training=True, validation=False, device="cuda"):
   assert(args.data is not None)
   kind = args.data_kind
   if args.derive_kind:
@@ -36,7 +36,7 @@ def load(args, training=True, device="cuda"):
     )
   elif kind == "ortho":
     return ortho(
-      args.data, training=training, normalize=False, size=size,
+      args.data, training=training, validation=validation, normalize=False, size=size,
       white_bg=args.bg=="white",
       with_mask = with_mask,
       device=device,
@@ -104,10 +104,10 @@ def original(
   return exp_imgs, cameras.NeRFCamera(cam_to_worlds, focal), None
 
 def ortho(
-  dir=".", normalize=True, training=True, size=256, white_bg=False, with_mask=False,
+  dir=".", normalize=True, training=True, validation=False, size=256, white_bg=False, with_mask=False,
   device="cuda",
 ):
-  kind = "train" if training else "test"
+  kind = "train" if training else "val" if validation else "test"
   tfs = json.load(open(dir + f"transforms_{kind}.json"))
   channels = 3 + with_mask
 
