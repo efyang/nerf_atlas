@@ -513,9 +513,9 @@ def train(model, cam, labels, opt, args, val_labels=None, val_cam=None, light=No
         val_out, rays = render(model, val_cam[val_idxs], crop, size=args.render_size, times=val_ts, args=args, with_noise=None)
         if isinstance(model, fvrnerf.FVRNeRF) or isinstance(model, fvrnerf.LearnedFVR):
           val_out, val_out_fft = val_out
-          val_loss = loss_fn(val_ref, val_out)
-          val_loss = val_loss.item()
-          val_losses.append(val_loss)
+        val_loss = loss_fn(val_ref, val_out)
+        val_loss = val_loss.item()
+        val_losses.append(val_loss)
 
     if light is not None: model.refl.light = light[idxs]
     # TODO this feels wrong somehow? How to more elegantly handle case of indexing refl.light
@@ -527,7 +527,7 @@ def train(model, cam, labels, opt, args, val_labels=None, val_cam=None, light=No
     if args.omit_bg and (i % args.save_freq) != 0 and (i % args.valid_freq) != 0 and \
       ref.mean() + 0.3 < sqr(random.random()): continue
 
-    out, rays = render(model, cam[idxs], crop, size=args.render_size, times=ts, args=args, with_noise=1.0)
+    out, rays = render(model, cam[idxs], crop, size=args.render_size, times=ts, args=args, with_noise=0.065)
     if isinstance(model, fvrnerf.FVRNeRF) or isinstance(model, fvrnerf.LearnedFVR):
       out, out_fft = out
       ref_fft = torch.fft.fftn(ref, dim=(1,2), norm="ortho")
@@ -1003,12 +1003,12 @@ def main():
   # for some reason AdamW doesn't seem to work here
   # eps = 1e-7 was in the original paper.
   opt = optim.AdamW(parameters, lr=args.learning_rate, weight_decay=args.decay, eps=1e-8, amsgrad=True)
-  # opt = optim.Adam(parameters, lr=args.learning_rate, eps=1e-7, weight_decay=args.decay, amsgrad=True)
+  # opt = optim.Adam(parameters, lr=args.learning_rate, eps=1e-8, weight_decay=args.decay, amsgrad=True)
 
   # TODO should T_max = -1 or args.epochs
   sched = None
   if args.epochs > 0 and not args.no_sched:
-    sched = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs, eta_min=5e-4)
+    sched = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs, eta_min=5e-5)
     # sched = optim.lr_scheduler.OneCycleLR(opt, total_steps=args.epochs, max_lr=args.learning_rate, final_div_factor=args.learning_rate/1e-4)
   if args.load:
     opt.load_state_dict(checkpoint['optimizer_state_dict'])

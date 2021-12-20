@@ -250,6 +250,7 @@ class View(Reflectance):
       in_size=in_size, out=self.out_features, latent_size=self.latent_size,
       enc=FourierEncoder(input_dims=in_size),
       num_layers=5, hidden_size=128, xavier_init=True,
+      activations=[F.leaky_relu]*5,
     )
   def forward(self, x, view, normal=None, light=None, latent=None):
     v = self.view_enc(view)

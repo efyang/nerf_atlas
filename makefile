@@ -5,9 +5,9 @@ clean:
 
 original: clean
 	python3 -O runner.py -d data/nerf_synthetic/lego/ --data-kind original \
-	--size 32 --crop --epochs 80_000 --save models/lego.pt \
-	--near 2 --far 6 --batch-size 4 --crop-size 26 --model plain -lr 1e-3 \
-	--loss-fns l2 --valid-freq 499 --refl-kind view #--load models/lego.pt #--omit-bg
+	--size 65 --crop --crop-size 25	--epochs 80_000 --save models/lego.pt \
+	--near 2 --far 6 --batch-size 10 --crop-size 26 --model plain -lr 1e-3 --skip-loss 100 \
+	--loss-fns l2 --valid-freq 249 --save-freq 500 --refl-kind view #--load models/lego.pt #--omit-bg
 
 volsdf: clean
 	python3 runner.py -d data/nerf_synthetic/lego/ --data-kind original \
@@ -300,18 +300,18 @@ nerv_point_fourier: clean
 
 test_original: clean
 	python3 -O runner.py -d data/nerf_synthetic/lego/ --data-kind original \
-	--size 32 --crop --epochs 0 --near 2 --far 6 --batch-size 5 \
-  --crop-size 26 --load models/lego.pt
+	--size 65 --crop --epochs 0 --near 2 --far 6 --batch-size 5 --notraintest \
+	--crop-size 26 --refl-kind view --load models/lego.pt
 
 fvr:
 	python3 -O runner.py -d data/ortho_big/hotdog_ortho/ --data-kind ortho \
-	--size 65 --epochs 3000 --save models/lego_ortho_sphc3sig.pt --clip-gradients 1e-1 \
-	--batch-size 25	--model fvr -lr 2e-3 --save-freq=1000 --skip-loss 100 --decay 1e-1 \
+	--size 257 --epochs 30000 --save models/lego_ortho_sphc3sig2.pt --clip-gradients 1e-1 \
+	--batch-size 3	--model fvr -lr 1e-3 --save-freq=1000 --skip-loss 100 --decay 1e-1 \
 	--loss-fns l2 --valid-freq 250 --refl-kind multfvrview --sigmoid-kind leaky_relu #--load models/lego_ortho_sphc3sig.pt #--omit-bg
 
-test_fvr: clean
-	python3 -O runner.py -d data/lego_ortho/ --data-kind ortho \
-	--size 65	--epochs 0 --batch-size 1 --notraintest \
+test_fvr:
+	python3 -O runner.py -d data/ortho_big/lego_ortho/ --data-kind ortho \
+	--size 129	--epochs 0 --batch-size 1 --notraintest \
 	--model fvr --refl-kind multfvrview --sigmoid-kind leaky_relu --load models/lego_ortho_sphc3sig.pt #--omit-bg
 
 learnedfvr: clean

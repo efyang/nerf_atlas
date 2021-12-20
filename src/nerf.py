@@ -287,7 +287,7 @@ class PlainNeRF(CommonNeRF):
     self.first = SkipConnMLP(
       in_size=3, out=1 + intermediate_size, latent_size=self.latent_size,
       enc=FourierEncoder(input_dims=3, device=device),
-
+      activations=[F.leaky_relu]*6,
       num_layers = 6, hidden_size = 128, xavier_init=True,
     )
 

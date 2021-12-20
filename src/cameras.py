@@ -85,8 +85,8 @@ class FVRNeRFCamera(Camera):
     #   v = v + ((torch.randn_like(v))*with_noise).clamp(-with_noise, with_noise)
 
     s = torch.stack([
-        (u - (size-1) * 0.5), # * self.ortho_scale,
-        -(v - (size-1) * 0.5), # * self.ortho_scale,
+        (u - (size-1) * 0.5)/size, # * self.ortho_scale,
+        -(v - (size-1) * 0.5)/size, # * self.ortho_scale,
         torch.zeros_like(u),
     ], dim=-1)
 
@@ -107,17 +107,25 @@ class FVRNeRFCamera(Camera):
     r_d = r_d.permute(2,0,1,3) # [H, W, B, 3] -> [B, H, W, 3]
     slice_positions = slice_positions.permute(2,0,1,3) # [H, W, B, 3] -> [B, H, W, 3]
     uvs = s.permute(2,0,1,3) # [H, W, B, 3] -> [B, H, W, 3]
-    distances = uvs.norm(dim=-1)/(size/2) + 0.01
+    distances = uvs.norm(dim=-1)
 
+    position_noise = None
+    nonoise_positions = slice_positions
     if with_noise:
       # slice_positions += (torch.rand_like(slice_positions) - 0.5) * 0.1 *with_noise
-      slice_positions += (torch.randn_like(slice_positions) * with_noise * (distances[..., None])).clamp(-with_noise*3, with_noise*3)
+      # slice_positions += (torch.randn_like(slice_positions) * with_noise * (distances[..., None])).clamp(-with_noise*3, with_noise*3)
+      # distance_weighting = distances + 0.1
+      # force everything to be jittered by adding 1e-2
+      distance_weighting = distances + 1/size
+      # position_noise = (torch.randn_like(slice_positions) * with_noise).clamp(-with_noise*3, with_noise*3)
+      position_noise = (torch.randn_like(slice_positions) * with_noise * distance_weighting[..., None]).clamp(-with_noise*3, with_noise*3)
+      slice_positions += position_noise
       # r_d = F.normalize(r_d + (torch.rand_like(r_d)-0.5)*0.05, dim=-1)
-      # r_d += torch.randn_like(slice_positions).clamp(-with_noise*3, with_noise*3) * with_noise * 0.05
+      # r_d += torch.randn_like(slice_positions).clamp(-with_noise*3, with_noise*3) * with_noise * 0.5
       # r_d = F.normalize(r_d, dim=-1)
     # return the slice through the origin parallel to image plane
     # slice_positions = vec_to_spherical_coords(slice_positions)
-    return torch.cat([slice_positions, r_d], dim=-1)
+    return (torch.cat([slice_positions, r_d], dim=-1), position_noise, nonoise_positions)
 
 
 
